@@ -1,0 +1,7 @@
+{
+  "name": "MotoCare PH - Motorcycle Maintenance & Digital Garage",
+  "description": "Comprehensive motorcycle maintenance, OEM service intervals, digital garage, LTO renewal tracker, and GPS ride tracking for riders in the Philippines.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
