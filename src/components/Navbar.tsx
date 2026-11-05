@@ -1,6 +1,21 @@
 import React from 'react';
-import { ActiveTab, Motorcycle, UserSubscription } from '../types';
-import { Bell, ChevronDown, Plus, Sparkles, Check, Vibrate, AlertTriangle } from 'lucide-react';
+import { ActiveTab, Motorcycle, UserSubscription, AppNotification, PaymentSubmission } from '../types';
+import {
+  Bell,
+  ChevronDown,
+  Plus,
+  Sparkles,
+  Check,
+  Vibrate,
+  AlertTriangle,
+  ShieldCheck,
+  Zap,
+  CreditCard,
+  Calendar,
+  CheckCircle2,
+  Trash2,
+  ArrowRight,
+} from 'lucide-react';
 import { sounds } from '../utils/audio';
 import { PWAInstallButton } from './PWAInstallButton';
 import { MaintenanceReminder } from '../types';
@@ -16,6 +31,8 @@ interface NavbarProps {
   motorcycles: Motorcycle[];
   activeBike: Motorcycle | null;
   subscription: UserSubscription;
+  notifications: AppNotification[];
+  submissions: PaymentSubmission[];
   onToggleDemoTier: () => void;
   onSelectBike: (bikeId: string) => void;
   onOpenAddBike: () => void;
@@ -23,6 +40,8 @@ interface NavbarProps {
   onOpenPaywall: () => void;
   onOpenCasaBooklet?: () => void;
   onGoToHome?: () => void;
+  onClearNotifications: () => void;
+  onMarkNotificationRead: (id: string) => void;
   overdueCount: number;
   overdueReminders?: MaintenanceReminder[];
   onOpenServiceForReminder?: (reminder: MaintenanceReminder) => void;
@@ -34,21 +53,32 @@ export const Navbar: React.FC<NavbarProps> = ({
   motorcycles,
   activeBike,
   subscription,
+  notifications = [],
+  submissions = [],
   onToggleDemoTier,
   onSelectBike,
   onOpenAddBike,
   onOpenAddService,
   onOpenPaywall,
   onGoToHome,
+  onClearNotifications,
+  onMarkNotificationRead,
   overdueCount,
   overdueReminders = [],
   onOpenServiceForReminder,
 }) => {
   const [bikeMenuOpen, setBikeMenuOpen] = React.useState(false);
   const [bellOpen, setBellOpen] = React.useState(false);
+  const [activeNotifTab, setActiveNotifTab] = React.useState<'actions' | 'logs'>('actions');
   const dropdownRef = React.useRef<HTMLDivElement>(null);
   const bellContainerRef = React.useRef<HTMLDivElement>(null);
   const isPro = subscription.tier === 'pro';
+
+  const pendingSubmissions = submissions.filter((s) => s.status === 'pending');
+  const unreadNotifs = notifications.filter((n) => !n.isRead);
+
+  // Total count of actions requiring immediate attention
+  const totalActionCount = overdueCount + pendingSubmissions.length + unreadNotifs.length;
 
   const [notifPerm, setNotifPerm] = React.useState<NotificationPermission>(() =>
     getNotificationPermission()
@@ -118,6 +148,29 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* In-App PWA Install Button (Android & iOS) */}
             <PWAInstallButton variant="header" />
 
+            {/* Admin Portal Header Shortcut with Pending Payment Badge */}
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playClick();
+                onTabChange(activeTab === 'admin' ? 'garage' : 'admin');
+              }}
+              className={`px-2 py-1 sm:px-2.5 sm:py-1 rounded-xl text-[10px] sm:text-xs font-bold transition-all flex items-center gap-1 shadow-2xs ${
+                activeTab === 'admin'
+                  ? 'bg-slate-900 text-amber-300 ring-2 ring-slate-900'
+                  : 'bg-white hover:bg-slate-100 border border-slate-200 text-slate-700'
+              }`}
+              title="Open Admin Dashboard to verify payments & manage auto-km"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="hidden xs:inline">Admin</span>
+              {pendingSubmissions.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-white text-[9px] font-black animate-pulse">
+                  {pendingSubmissions.length}
+                </span>
+              )}
+            </button>
+
             {/* Demo Toggle Switch (Evaluation helper) */}
             <button
               type="button"
@@ -131,45 +184,96 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </button>
 
-            {/* Notification Bell */}
+            {/* Notification Bell with Full Actions Center */}
             <div className="relative shrink-0" ref={bellContainerRef}>
               <button
                 type="button"
                 onClick={() => setBellOpen(!bellOpen)}
                 className="p-1.5 sm:p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors relative"
-                title="Notifications"
+                title="Notifications & Actions Center"
               >
                 <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
-                {overdueCount > 0 && (
-                  <span className="absolute top-1 sm:top-1.5 right-1 sm:right-1.5 w-2 h-2 rounded-full bg-red-500 ring-2 ring-white animate-pulse" />
+                {totalActionCount > 0 && (
+                  <span className="absolute top-1 sm:top-1.5 right-1 sm:right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-white animate-pulse">
+                    {totalActionCount}
+                  </span>
                 )}
               </button>
 
               {bellOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-3xl shadow-2xl border border-slate-100 p-4 z-50 text-xs space-y-3 animate-in fade-in zoom-in-95 duration-100">
-                  <div className="font-extrabold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
+                <div className="absolute right-0 mt-2 w-84 sm:w-92 bg-white rounded-3xl shadow-2xl border border-slate-100 p-4 z-50 text-xs space-y-3 animate-in fade-in zoom-in-95 duration-100">
+                  {/* Notification Center Header */}
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <div className="flex items-center gap-1.5">
                       <Bell className="w-4 h-4 text-[#F95A00]" />
-                      <span>Maintenance Alerts</span>
-                    </span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                      overdueCount > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                      {overdueCount} Overdue
-                    </span>
+                      <span className="font-extrabold text-slate-900 text-sm">Actions & Notifications</span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                          totalActionCount > 0 ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
+                        }`}
+                      >
+                        {totalActionCount > 0 ? `${totalActionCount} Required` : 'All Done ✓'}
+                      </span>
+                      {notifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            sounds.playClick();
+                            onClearNotifications();
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-600 rounded transition-colors"
+                          title="Clear all notification logs"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Push Notification & Vibration Controls */}
+                  {/* Filter Sub-Tabs */}
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setActiveNotifTab('actions')}
+                      className={`flex-1 py-1 rounded-lg font-bold transition-all text-center ${
+                        activeNotifTab === 'actions'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Actions to Perform ({overdueCount + pendingSubmissions.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveNotifTab('logs')}
+                      className={`flex-1 py-1 rounded-lg font-bold transition-all text-center ${
+                        activeNotifTab === 'logs'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Activity Log ({notifications.length})
+                    </button>
+                  </div>
+
+                  {/* Push Notification & Vibration Controls Banner */}
                   <div className="p-2.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
                         <Vibrate className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Phone Push & Vibration</span>
+                        <span>Push Alerts & Phone Vibration</span>
                       </span>
-                      <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded ${
-                        notifPerm === 'granted' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'
-                      }`}>
-                        {notifPerm === 'granted' ? 'ACTIVE ✓' : 'STANDBY'}
+                      <span
+                        className={`text-[9.5px] font-extrabold px-1.5 py-0.5 rounded ${
+                          notifPerm === 'granted'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {notifPerm === 'granted' ? 'ENABLED ✓' : 'STANDBY'}
                       </span>
                     </div>
 
@@ -196,47 +300,151 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </div>
                   </div>
 
-                  {/* Overdue Task List */}
-                  <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                    {overdueReminders && overdueReminders.length > 0 ? (
-                      overdueReminders.map((rem) => {
-                        const overdueKm = (activeBike?.odometer || 0) - rem.nextDueOdo;
-                        return (
+                  {/* Tab 1: Actions To Be Performed */}
+                  {activeNotifTab === 'actions' && (
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-0.5">
+                      {/* 1. Pending Payments Needing Admin Approval */}
+                      {pendingSubmissions.length > 0 && (
+                        <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-2xl space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="font-extrabold text-amber-800 flex items-center gap-1">
+                              <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
+                              <span>ADMIN ACTION REQUIRED</span>
+                            </span>
+                            <span className="font-mono text-amber-700 font-bold">
+                              {pendingSubmissions.length} Payment(s) Pending
+                            </span>
+                          </div>
+                          <div className="font-bold text-slate-900 text-xs">
+                            {pendingSubmissions[0].paymentMethod.toUpperCase()} ₱{pendingSubmissions[0].amountPhp} Ref #{pendingSubmissions[0].referenceNumber}
+                          </div>
+                          <p className="text-[10px] text-slate-600">
+                            Confirm rider payment reference to approve Pro features.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBellOpen(false);
+                              onTabChange('admin');
+                            }}
+                            className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-[11px] rounded-xl shadow-2xs flex items-center justify-center gap-1 transition-all"
+                          >
+                            <span>Open Admin Portal & Approve Pro →</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {/* 2. Overdue Maintenance Tasks */}
+                      {overdueReminders && overdueReminders.length > 0 ? (
+                        overdueReminders.map((rem) => {
+                          const overdueKm = (activeBike?.odometer || 0) - rem.nextDueOdo;
+                          return (
+                            <div
+                              key={rem.id}
+                              className="p-3 bg-red-50/80 border border-red-200 rounded-2xl text-left space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="font-extrabold text-red-700 flex items-center gap-1">
+                                  <AlertTriangle className="w-3.5 h-3.5" />
+                                  <span>OVERDUE by {Math.abs(overdueKm).toLocaleString()} km</span>
+                                </span>
+                                <span className="text-slate-400 font-mono">
+                                  Due: {rem.nextDueOdo.toLocaleString()} km
+                                </span>
+                              </div>
+                              <div className="font-bold text-slate-900 text-xs">{rem.title}</div>
+                              <p className="text-[10px] text-slate-600">
+                                Current odo {activeBike?.odometer.toLocaleString()} km exceeds OEM service interval.
+                              </p>
+                              {onOpenServiceForReminder && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setBellOpen(false);
+                                    onOpenServiceForReminder(rem);
+                                  }}
+                                  className="w-full py-1.5 bg-red-600 hover:bg-red-700 text-white font-extrabold text-[11px] rounded-xl shadow-2xs flex items-center justify-center gap-1 transition-all"
+                                >
+                                  <span>+ Mark as Serviced Now →</span>
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })
+                      ) : null}
+
+                      {/* Fallback if no overdue and no pending submissions */}
+                      {overdueReminders.length === 0 && pendingSubmissions.length === 0 && (
+                        <div className="py-6 text-center text-slate-500">
+                          <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-1.5" />
+                          <p className="font-bold text-xs text-slate-800">All actions are up to date!</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            Any pending payments or overdue maintenance will appear here with direct action buttons.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tab 2: Activity Logs & Events */}
+                  {activeNotifTab === 'logs' && (
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
+                      {notifications.length > 0 ? (
+                        notifications.map((notif) => (
                           <div
-                            key={rem.id}
-                            className="p-2.5 bg-red-50/70 border border-red-200 rounded-2xl text-left space-y-1"
+                            key={notif.id}
+                            className={`p-2.5 rounded-2xl border text-left space-y-1 transition-colors ${
+                              notif.isRead
+                                ? 'bg-slate-50 border-slate-100 text-slate-600'
+                                : 'bg-white border-slate-200 text-slate-900 shadow-2xs'
+                            }`}
                           >
                             <div className="flex items-center justify-between text-[10px]">
-                              <span className="font-extrabold text-red-700 flex items-center gap-1">
-                                <AlertTriangle className="w-3 h-3" />
-                                <span>OVERDUE by {Math.abs(overdueKm).toLocaleString()} km</span>
+                              <span className="font-bold flex items-center gap-1">
+                                {notif.type === 'auto_km_added' && (
+                                  <Zap className="w-3 h-3 text-amber-500" />
+                                )}
+                                {notif.type.includes('payment') && (
+                                  <CreditCard className="w-3 h-3 text-blue-500" />
+                                )}
+                                {notif.type.includes('maintenance') && (
+                                  <AlertTriangle className="w-3 h-3 text-orange-500" />
+                                )}
+                                <span>{notif.title}</span>
                               </span>
-                              <span className="text-slate-400 font-mono">Due: {rem.nextDueOdo.toLocaleString()} km</span>
+                              <span className="text-slate-400 font-mono text-[9px]">
+                                {new Date(notif.timestamp).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
                             </div>
-                            <div className="font-bold text-slate-800 text-xs truncate">{rem.title}</div>
-                            {onOpenServiceForReminder && (
+                            <p className="text-[11px] text-slate-600 leading-snug">{notif.message}</p>
+                            {notif.actionLabel && (
                               <button
                                 type="button"
                                 onClick={() => {
+                                  onMarkNotificationRead(notif.id);
                                   setBellOpen(false);
-                                  onOpenServiceForReminder(rem);
+                                  if (notif.actionPayload?.tab) {
+                                    onTabChange(notif.actionPayload.tab);
+                                  }
                                 }}
-                                className="text-[10px] font-bold text-[#F95A00] hover:underline block pt-0.5"
+                                className="text-[10px] font-bold text-[#F95A00] hover:underline flex items-center gap-0.5 pt-0.5"
                               >
-                                + Mark as Serviced Now →
+                                <span>{notif.actionLabel}</span>
+                                <ArrowRight className="w-2.5 h-2.5" />
                               </button>
                             )}
                           </div>
-                        );
-                      })
-                    ) : (
-                      <div className="py-3 text-center text-slate-500">
-                        <Check className="w-6 h-6 text-emerald-500 mx-auto mb-1" />
-                        <p className="font-medium text-xs">All PMS intervals are up to date!</p>
-                        <p className="text-[10px] text-slate-400">Alerts will trigger when odometer passes service km.</p>
-                      </div>
-                    )}
-                  </div>
+                        ))
+                      ) : (
+                        <div className="py-6 text-center text-slate-400 text-xs">
+                          No recent notification logs.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

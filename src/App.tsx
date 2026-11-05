@@ -1,8 +1,3 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React from 'react';
 import {
   Motorcycle,
@@ -11,6 +6,8 @@ import {
   ActiveTab,
   UserSubscription,
   PaymentMethod,
+  PaymentSubmission,
+  AppNotification,
 } from './types';
 import {
   loadMotorcycles,
@@ -27,6 +24,13 @@ import {
   saveQuickKmPresets,
   resetAllToDefault,
   analyzeReminder,
+  loadPaymentSubmissions,
+  savePaymentSubmissions,
+  loadAppNotifications,
+  saveAppNotifications,
+  loadAutoKmConfig,
+  saveAutoKmConfig,
+  AutoKmConfig,
 } from './utils/storage';
 import { sounds } from './utils/audio';
 
@@ -40,7 +44,14 @@ import { OnboardingView } from './components/OnboardingView';
 import { GpsRideTrackerSheet } from './components/GpsRideTrackerSheet';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OverdueAlertBanner } from './components/OverdueAlertBanner';
-import { triggerOverdueAlert } from './utils/notifications';
+import { AdminDashboard } from './components/AdminDashboard';
+import { AutoKmTracker } from './components/AutoKmTracker';
+import {
+  triggerOverdueAlert,
+  triggerPaymentApprovedAlert,
+  triggerPaymentSubmittedAlert,
+  triggerAutoKmAlert,
+} from './utils/notifications';
 
 // Modals
 import { QuickAddOdometerModal } from './components/QuickAddOdometerModal';
@@ -61,6 +72,9 @@ export default function App() {
   const [serviceRecords, setServiceRecords] = React.useState<ServiceRecord[]>(() => loadServiceRecords());
   const [subscription, setSubscription] = React.useState<UserSubscription>(() => loadSubscription());
   const [quickPresets, setQuickPresets] = React.useState<number[]>(() => loadQuickKmPresets());
+  const [submissions, setSubmissions] = React.useState<PaymentSubmission[]>(() => loadPaymentSubmissions());
+  const [notifications, setNotifications] = React.useState<AppNotification[]>(() => loadAppNotifications());
+  const [autoKmConfig, setAutoKmConfig] = React.useState<AutoKmConfig>(() => loadAutoKmConfig());
 
   // Active Tab
   const [activeTab, setActiveTab] = React.useState<ActiveTab>('garage');
@@ -102,6 +116,18 @@ export default function App() {
   React.useEffect(() => {
     saveQuickKmPresets(quickPresets);
   }, [quickPresets]);
+
+  React.useEffect(() => {
+    savePaymentSubmissions(submissions);
+  }, [submissions]);
+
+  React.useEffect(() => {
+    saveAppNotifications(notifications);
+  }, [notifications]);
+
+  React.useEffect(() => {
+    saveAutoKmConfig(autoKmConfig);
+  }, [autoKmConfig]);
 
   React.useEffect(() => {
     if (activeBikeId) {
@@ -224,18 +250,193 @@ export default function App() {
     setServiceRecords(serviceRecords.filter((r) => r.id !== recordId));
   };
 
+  const handleApprovePayment = (submissionId: string) => {
+    const sub = submissions.find((s) => s.id === submissionId);
+    if (!sub) return;
+
+    setSubmissions((prev) =>
+      prev.map((s) =>
+        s.id === submissionId
+          ? {
+              ...s,
+              status: 'approved',
+              approvedAt: new Date().toISOString(),
+              reviewedBy: 'Admin (System)',
+            }
+          : s
+      )
+    );
+
+    // If this submission belongs to the current user or is active, upgrade user to Pro
+    setSubscription({
+      tier: 'pro',
+      plan: 'monthly',
+      status: 'active',
+      paymentMethod: sub.paymentMethod,
+      referenceNumber: sub.referenceNumber,
+      submissionId: sub.id,
+    });
+
+    triggerPaymentApprovedAlert(sub.referenceNumber);
+
+    const approvedNotif: AppNotification = {
+      id: `notif-approved-${Date.now()}`,
+      type: 'payment_approved',
+      title: '🎉 Pro Access Approved!',
+      message: `Your payment (Ref #${sub.referenceNumber}) has been confirmed! VIP Pro features are now unlocked.`,
+      timestamp: new Date().toISOString(),
+      urgency: 'high',
+      isRead: false,
+      actionLabel: 'Explore Garage',
+      actionPayload: { tab: 'garage' },
+    };
+    setNotifications((prev) => [approvedNotif, ...prev]);
+  };
+
+  const handleRejectPayment = (submissionId: string, reason = 'Reference number could not be verified') => {
+    setSubmissions((prev) =>
+      prev.map((s) =>
+        s.id === submissionId
+          ? {
+              ...s,
+              status: 'rejected',
+              notes: reason,
+              reviewedBy: 'Admin (System)',
+            }
+          : s
+      )
+    );
+
+    // If matches current user subscription, reset to free
+    if (subscription.submissionId === submissionId || subscription.status === 'pending_verification') {
+      setSubscription({
+        tier: 'free',
+        plan: null,
+        status: 'free',
+      });
+    }
+
+    const rejectNotif: AppNotification = {
+      id: `notif-rejected-${Date.now()}`,
+      type: 'payment_rejected',
+      title: 'Payment Verification Notice',
+      message: `Payment submission was marked rejected: ${reason}. Please re-submit reference code.`,
+      timestamp: new Date().toISOString(),
+      urgency: 'medium',
+      isRead: false,
+      actionLabel: 'Re-submit Payment',
+      actionPayload: { tab: 'garage' },
+    };
+    setNotifications((prev) => [rejectNotif, ...prev]);
+  };
+
+  const handleCreateMockPayment = () => {
+    const mockRef = `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
+    const mockSub: PaymentSubmission = {
+      id: `sub-${Date.now()}`,
+      referenceNumber: mockRef,
+      amountPhp: 49,
+      paymentMethod: 'gcash',
+      bikeNickname: 'Daily Clicker',
+      bikeModel: '2025 Honda Click 125i',
+      userName: 'Carlo Mendoza',
+      userEmail: 'carlo.mendoza@example.ph',
+      submittedAt: new Date().toISOString(),
+      status: 'pending',
+      notes: `Paid ₱49 via GCash QRPH. Ref #${mockRef}.`,
+    };
+
+    setSubmissions((prev) => [mockSub, ...prev]);
+
+    const notif: AppNotification = {
+      id: `notif-sub-${Date.now()}`,
+      type: 'payment_pending',
+      title: 'New Payment Pending Review',
+      message: `Rider submitted ₱49 via GCash (Ref #${mockRef}). Confirm in Admin.`,
+      timestamp: new Date().toISOString(),
+      urgency: 'high',
+      isRead: false,
+      actionLabel: 'Review in Admin',
+      actionPayload: { tab: 'admin' },
+    };
+    setNotifications((prev) => [notif, ...prev]);
+  };
+
+  const handleAutoAddKm = (km: number) => {
+    if (!activeBike?.id) return;
+    const newOdo = activeBike.odometer + km;
+    handleUpdateOdometer(newOdo);
+
+    triggerAutoKmAlert(activeBike.nickname || activeBike.model, km, newOdo);
+
+    const autoNotif: AppNotification = {
+      id: `notif-autokm-${Date.now()}`,
+      type: 'auto_km_added',
+      title: `🛵 +${km} km Auto-Logged (5m Inactivity)`,
+      message: `Added +${km} km to ${activeBike.nickname || activeBike.model} after 5 minutes of no action. Current odo: ${newOdo.toLocaleString()} km.`,
+      timestamp: new Date().toISOString(),
+      urgency: 'info',
+      isRead: false,
+      actionLabel: 'Review Odometer',
+      actionPayload: { tab: 'garage', addedKm: km, newOdo },
+    };
+    setNotifications((prev) => [autoNotif, ...prev]);
+  };
+
   const handleSubscribe = (
     plan: 'monthly' | 'annual',
     paymentMethod: PaymentMethod,
     referenceNumber?: string
   ) => {
-    setSubscription({
-      tier: 'pro',
-      plan,
-      status: 'active',
+    const refCode = referenceNumber || `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
+    const newSub: PaymentSubmission = {
+      id: `sub-${Date.now()}`,
+      referenceNumber: refCode,
+      amountPhp: 49,
       paymentMethod,
-      referenceNumber,
+      bikeNickname: activeBike.nickname,
+      bikeModel: `${activeBike.brand} ${activeBike.model}`,
+      userName: 'Current Rider',
+      userEmail: 'subscriber@motocare.ph',
+      submittedAt: new Date().toISOString(),
+      status: 'pending',
+      notes: `Submitted via in-app payment modal. Awaiting Admin verification.`,
+    };
+
+    setSubmissions((prev) => [newSub, ...prev]);
+
+    setSubscription({
+      tier: 'free',
+      plan: 'monthly',
+      status: 'pending_verification',
+      paymentMethod,
+      referenceNumber: refCode,
+      submissionId: newSub.id,
     });
+
+    triggerPaymentSubmittedAlert(refCode, paymentMethod);
+
+    const pendingNotif: AppNotification = {
+      id: `notif-pending-${Date.now()}`,
+      type: 'payment_pending',
+      title: 'Payment Submitted for Verification',
+      message: `₱49 payment (${paymentMethod.toUpperCase()} Ref #${refCode}) submitted. Admin approval pending.`,
+      timestamp: new Date().toISOString(),
+      urgency: 'high',
+      isRead: false,
+      actionLabel: 'Open Admin Portal',
+      actionPayload: { tab: 'admin' },
+    };
+    setNotifications((prev) => [pendingNotif, ...prev]);
+  };
+
+  const handleClearNotifications = () => {
+    sounds.playClick();
+    setNotifications([]);
+  };
+
+  const handleMarkNotificationRead = (id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
   };
 
   const handleCancelSubscription = () => {
@@ -281,6 +482,8 @@ export default function App() {
         motorcycles={motorcycles}
         activeBike={activeBike}
         subscription={subscription}
+        notifications={notifications}
+        submissions={submissions}
         onToggleDemoTier={handleToggleDemoTier}
         onSelectBike={handleSelectBike}
         onOpenAddBike={() => {
@@ -301,6 +504,8 @@ export default function App() {
           setMotorcycles([]);
           setActiveBikeId('');
         }}
+        onClearNotifications={handleClearNotifications}
+        onMarkNotificationRead={handleMarkNotificationRead}
         overdueCount={overdueCount}
         overdueReminders={overdueReminders}
         onOpenServiceForReminder={(rem) => {
@@ -432,6 +637,22 @@ export default function App() {
               </div>
             )}
 
+            {/* Admin Dashboard: Payment Approvals & Auto-Km Rules Engine */}
+            {activeTab === 'admin' && (
+              <AdminDashboard
+                submissions={submissions}
+                activeBike={activeBike}
+                subscription={subscription}
+                autoKmConfig={autoKmConfig}
+                onApprovePayment={handleApprovePayment}
+                onRejectPayment={handleRejectPayment}
+                onCreateMockPayment={handleCreateMockPayment}
+                onUpdateAutoKmConfig={setAutoKmConfig}
+                onTriggerAutoKmNow={() => handleAutoAddKm(autoKmConfig.incrementKm)}
+                onBack={() => setActiveTab('garage')}
+              />
+            )}
+
             {/* Floating Action Button (+ New Task) matching screenshots 2, 3, 4 */}
             {(activeTab === 'garage' || activeTab === 'reminders') && (
               <div className="fixed bottom-6 right-4 sm:right-auto sm:left-1/2 sm:translate-x-28 z-30">
@@ -452,6 +673,15 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* Auto-Commute Inactivity Odometer Tracker (5-minute rule) */}
+      <AutoKmTracker
+        bike={activeBike}
+        enabled={autoKmConfig.enabled}
+        intervalMinutes={autoKmConfig.intervalMinutes}
+        incrementKm={autoKmConfig.incrementKm}
+        onAutoAddKm={handleAutoAddKm}
+      />
 
       {/* Modals */}
       <QuickAddOdometerModal
@@ -503,6 +733,10 @@ export default function App() {
         subscription={subscription}
         onSubscribe={handleSubscribe}
         onCancelSubscription={handleCancelSubscription}
+        onOpenAdmin={() => {
+          setIsPaywallOpen(false);
+          setActiveTab('admin');
+        }}
       />
 
       {/* GPS Ride Tracker Modal */}

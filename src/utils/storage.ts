@@ -1,4 +1,12 @@
-import { Motorcycle, MaintenanceReminder, ServiceRecord, PreRideItem, UserSubscription } from '../types';
+import {
+  Motorcycle,
+  MaintenanceReminder,
+  ServiceRecord,
+  PreRideItem,
+  UserSubscription,
+  PaymentSubmission,
+  AppNotification,
+} from '../types';
 import {
   INITIAL_MOTORCYCLES,
   INITIAL_REMINDERS,
@@ -15,6 +23,9 @@ const STORAGE_KEYS = {
   PRE_RIDE: 'motocare_app_preride_v4',
   SUBSCRIPTION: 'motocare_app_subscription_v4',
   CUSTOM_PRESETS: 'motocare_app_quick_km_presets_v4',
+  PAYMENTS: 'motocare_app_payment_submissions_v4',
+  NOTIFICATIONS: 'motocare_app_notifications_v4',
+  AUTO_KM: 'motocare_app_auto_km_config_v4',
 };
 
 // --- Storage Load / Save ---
@@ -271,3 +282,130 @@ export function exportFullBackupJson(
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// --- Payment Submissions for Admin Verification ---
+
+export const INITIAL_PAYMENTS: PaymentSubmission[] = [
+  {
+    id: 'sub-sample-1',
+    referenceNumber: 'GCASH-982143',
+    amountPhp: 49,
+    paymentMethod: 'gcash',
+    bikeNickname: 'Aerox Speed',
+    bikeModel: '2025 Yamaha Aerox 155',
+    userName: 'Mark Bautista',
+    userEmail: 'mark.bautista@example.ph',
+    submittedAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(), // 18 mins ago
+    status: 'pending',
+    notes: 'Paid via GCash QRPH. Reference code #GCASH-982143.',
+  },
+  {
+    id: 'sub-sample-2',
+    referenceNumber: 'GOTYME-449120',
+    amountPhp: 49,
+    paymentMethod: 'gotyme',
+    bikeNickname: 'Daily Clicker',
+    bikeModel: '2025 Honda Click 125i',
+    userName: 'Juan Dela Cruz',
+    userEmail: 'juan.rider@example.ph',
+    submittedAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(), // 2 hours ago
+    status: 'approved',
+    approvedAt: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
+    reviewedBy: 'Admin (System)',
+    notes: 'Verified via GoTyme bank statement.',
+  },
+];
+
+export function loadPaymentSubmissions(): PaymentSubmission[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+    if (raw) return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to load payment submissions', err);
+  }
+  return INITIAL_PAYMENTS;
+}
+
+export function savePaymentSubmissions(submissions: PaymentSubmission[]) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify(submissions));
+  } catch (err) {
+    console.error('Failed to save payment submissions', err);
+  }
+}
+
+// --- Action Notifications ---
+
+export const INITIAL_NOTIFICATIONS: AppNotification[] = [
+  {
+    id: 'notif-sample-1',
+    type: 'payment_pending',
+    title: 'Payment Verification Pending',
+    message: '1 payment of ₱49 is waiting for admin confirmation.',
+    timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+    urgency: 'high',
+    isRead: false,
+    actionLabel: 'Review in Admin',
+    actionPayload: { tab: 'admin' },
+  },
+  {
+    id: 'notif-sample-2',
+    type: 'maintenance_due_soon',
+    title: 'Upcoming Service: Spark Plug',
+    message: 'Spark plug replacement interval is approaching in 500 km.',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(),
+    urgency: 'medium',
+    isRead: false,
+    actionLabel: 'View Schedule',
+    actionPayload: { tab: 'reminders' },
+  },
+];
+
+export function loadAppNotifications(): AppNotification[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS);
+    if (raw) return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to load notifications', err);
+  }
+  return INITIAL_NOTIFICATIONS;
+}
+
+export function saveAppNotifications(notifications: AppNotification[]) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
+  } catch (err) {
+    console.error('Failed to save notifications', err);
+  }
+}
+
+// --- Auto-Commute 5-min Odometer Inactivity Settings ---
+
+export interface AutoKmConfig {
+  enabled: boolean;
+  intervalMinutes: number; // default: 5
+  incrementKm: number; // default: 5
+}
+
+export function loadAutoKmConfig(): AutoKmConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.AUTO_KM);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // fallback
+  }
+  return {
+    enabled: true,
+    intervalMinutes: 5,
+    incrementKm: 5,
+  };
+}
+
+export function saveAutoKmConfig(config: AutoKmConfig) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.AUTO_KM, JSON.stringify(config));
+  } catch {
+    // ignore
+  }
+}
+

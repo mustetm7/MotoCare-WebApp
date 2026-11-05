@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UserSubscription, PaymentMethod } from '../types';
-import { X, Zap, Bike, Headphones, FileText, Shield, QrCode, CheckCircle2, Copy, Check, Sparkles, ArrowRight, ExternalLink, Download, Smartphone } from 'lucide-react';
+import { X, Zap, Bike, Headphones, FileText, Shield, QrCode, CheckCircle2, Copy, Check, Sparkles, ArrowRight, ExternalLink, Download, Smartphone, Clock, ShieldCheck } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { sounds } from '../utils/audio';
 
@@ -14,6 +14,7 @@ interface PaywallModalProps {
     referenceNumber?: string
   ) => void;
   onCancelSubscription: () => void;
+  onOpenAdmin?: () => void;
 }
 
 export const PaywallModal: React.FC<PaywallModalProps> = ({
@@ -22,6 +23,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
   subscription,
   onSubscribe,
   onCancelSubscription,
+  onOpenAdmin,
 }) => {
   const [paymentMethod, setPaymentMethod] = useState<'gcash' | 'gotyme'>('gcash');
   const [referenceNumber, setReferenceNumber] = useState('');
@@ -156,7 +158,61 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
 
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
-          {isPro ? (
+          {subscription.status === 'pending_verification' ? (
+            <div className="space-y-4 text-center py-4 animate-in fade-in">
+              <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto shadow-md">
+                <Clock className="w-8 h-8 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-xl font-extrabold text-slate-900">Payment Submitted for Verification</h3>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
+                  Your ₱49 payment has been submitted. Our Admin will verify your reference number and confirm your Pro access shortly.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl text-xs space-y-2 text-left">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-500">Verification Status:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 font-extrabold text-amber-800 text-[10px] uppercase flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping inline-block" />
+                    Pending Admin Approval
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Payment Ref #:</span>
+                  <span className="font-mono font-bold text-slate-800">{subscription.referenceNumber || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Payment Method:</span>
+                  <span className="font-bold text-slate-800 uppercase">{subscription.paymentMethod || 'GCash'} QRPH</span>
+                </div>
+              </div>
+
+              <div className="pt-2 space-y-2">
+                {onOpenAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playClick();
+                      onClose();
+                      onOpenAdmin();
+                    }}
+                    className="w-full py-3 bg-slate-900 hover:bg-black text-amber-300 font-extrabold text-xs rounded-2xl transition-all shadow-md flex items-center justify-center gap-2"
+                  >
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Open Admin Portal to Confirm (Demo)</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-2xl transition-all"
+                >
+                  Return to Garage
+                </button>
+              </div>
+            </div>
+          ) : isPro ? (
             <div className="space-y-4 text-center py-4">
               <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-md">
                 <CheckCircle2 className="w-8 h-8" />
@@ -596,13 +652,13 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 text-amber-200" />
-                      <span>I Have Paid ₱49 via {currentProvider.name} — Unlock Pro</span>
+                      <span>I Have Paid ₱49 — Submit for Admin Approval</span>
                     </>
                   )}
                 </button>
 
                 <p className="text-[10px] text-center text-slate-400">
-                  Clicking confirms your payment and instantly unlocks all MotoCare Pro features.
+                  Submits reference to the Admin verification queue. Your Pro access will activate automatically upon confirmation.
                 </p>
               </div>
             </div>

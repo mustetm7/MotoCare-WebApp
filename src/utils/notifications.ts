@@ -123,3 +123,75 @@ export async function testOverdueAlert(): Promise<boolean> {
 
   return true;
 }
+
+/**
+ * Trigger Push Notification & Vibration when Admin Approves Pro Access
+ */
+export function triggerPaymentApprovedAlert(refCode: string): void {
+  vibratePhone([200, 100, 200, 100, 400]);
+  sounds.playSuccess();
+
+  if (isNotificationSupported() && Notification.permission === 'granted') {
+    try {
+      const notification = new Notification('🎉 MotoCare Pro Access Approved!', {
+        body: `Your payment (Ref #${refCode}) has been confirmed by Admin! Unlimited Garage and Auto-Odometer features are now unlocked.`,
+        icon: '/logo.png',
+        badge: '/logo.png',
+        tag: `motocare-approved-${refCode}`,
+      });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Trigger Push Notification when User Submits Payment for Admin Verification
+ */
+export function triggerPaymentSubmittedAlert(refCode: string, method: string): void {
+  vibratePhone([150, 80, 150]);
+  sounds.playSuccess();
+
+  if (isNotificationSupported() && Notification.permission === 'granted') {
+    try {
+      new Notification('📋 Payment Submitted for Admin Review', {
+        body: `Your ${method.toUpperCase()} payment of ₱49 (Ref #${refCode}) was submitted. Pro access will activate automatically upon admin confirmation.`,
+        icon: '/logo.png',
+        badge: '/logo.png',
+        tag: `motocare-submitted-${refCode}`,
+      });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Trigger Push Notification & Vibration when Auto-Commute adds kilometers after 5 minutes of no action
+ */
+export function triggerAutoKmAlert(bikeName: string, addedKm: number, newOdo: number): void {
+  vibratePhone([250, 100, 250]);
+  sounds.playSuccess();
+
+  if (isNotificationSupported() && Notification.permission === 'granted') {
+    try {
+      const notification = new Notification('🛵 Auto-Commute Logged (+5 km)', {
+        body: `+${addedKm} km was automatically added to ${bikeName} after 5 minutes of no action. Current odometer: ${newOdo.toLocaleString()} km.`,
+        icon: '/logo.png',
+        badge: '/logo.png',
+        tag: `motocare-autokm-${Date.now()}`,
+      });
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch {
+      // ignore
+    }
+  }
+}
+
