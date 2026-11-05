@@ -106,7 +106,7 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
       {/* Title */}
       <h3
         onClick={() => onEdit(reminder)}
-        className="text-base font-bold text-slate-900 cursor-pointer hover:text-[#F95A00] transition-colors leading-snug"
+        className="text-base font-bold text-slate-900 cursor-pointer hover:text-[#FF6B00] transition-colors leading-snug"
       >
         {reminder.title}
       </h3>
@@ -132,7 +132,7 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
             sounds.playSuccess();
             onComplete(reminder);
           }}
-          className="flex items-center gap-1.5 text-xs font-bold text-slate-800 hover:text-[#F95A00] px-3 py-1.5 rounded-xl hover:bg-orange-50 transition-colors"
+          className="flex items-center gap-1.5 text-xs font-bold text-slate-800 hover:text-[#FF6B00] px-3 py-1.5 rounded-xl hover:bg-orange-50 transition-colors"
         >
           <Check className="w-4 h-4 text-slate-700" />
           <span>Mark Serviced</span>
@@ -142,7 +142,7 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
       {/* Philippine OEM Manual Spec Box */}
       {reminder.manualSpecNote && (
         <div className="pt-2 border-t border-slate-100 text-xs space-y-1">
-          <div className="flex items-center gap-1 text-[10px] font-bold text-[#F95A00] tracking-wider uppercase">
+          <div className="flex items-center gap-1 text-[10px] font-bold text-[#FF6B00] tracking-wider uppercase">
             <span>🇵🇭</span>
             <span>PH MANUAL SPEC</span>
           </div>

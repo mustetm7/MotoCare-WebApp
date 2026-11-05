@@ -69,9 +69,9 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           </h1>
 
           {bike.nickname && (
-            <p className="text-xs font-semibold text-[#F95A00] mt-0.5">
-              '{bike.nickname}'
-            </p>
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-orange-50 border border-orange-200/80 text-xs font-bold text-[#FF6B00] mt-1 shadow-2xs">
+              <span>&apos;{bike.nickname}&apos;</span>
+            </div>
           )}
         </div>
 
@@ -91,7 +91,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
       <div className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm relative overflow-hidden">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 tracking-wider uppercase">
-            <Gauge className="w-4 h-4 text-[#F95A00]" />
+            <Gauge className="w-4 h-4 text-[#FF6B00]" />
             <span>CURRENT ODOMETER</span>
           </div>
           <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200/60 uppercase">
@@ -112,7 +112,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           <button
             type="button"
             onClick={onOpenEditOdometer}
-            className="px-5 py-2.5 bg-[#F95A00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#F95A00]/25 transition-all active:scale-95"
+            className="px-5 py-2.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#FF6B00]/25 transition-all active:scale-95"
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>Update</span>
@@ -123,8 +123,8 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
       {/* Auto-Track Ride (PRO Banner) */}
       <div className="p-4 rounded-2xl bg-white border border-slate-100 shadow-sm flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-[#F95A00] shrink-0">
-            <Navigation className="w-5 h-5 fill-[#F95A00]" />
+          <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-[#FF6B00] shrink-0">
+            <Navigation className="w-5 h-5 fill-[#FF6B00]" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
@@ -146,7 +146,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
               onOpenPaywall();
             }
           }}
-          className="px-4 py-2 bg-[#F95A00] hover:bg-[#EA580C] text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-[#F95A00]/20 whitespace-nowrap"
+          className="px-4 py-2 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-[#FF6B00]/20 whitespace-nowrap"
         >
           {isPro ? 'Launch' : 'Unlock'}
         </button>
@@ -159,7 +159,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           <button
             type="button"
             onClick={() => setShowCustomInput(!showCustomInput)}
-            className="text-[#F95A00] hover:underline font-bold flex items-center gap-1"
+            className="text-[#FF6B00] hover:underline font-bold flex items-center gap-1"
           >
             <SlidersHorizontal className="w-3 h-3" />
             <span>+ Custom Distance</span>
@@ -175,13 +175,13 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
               placeholder="e.g. 38 km"
               value={customDistance}
               onChange={(e) => setCustomDistance(e.target.value === '' ? '' : Number(e.target.value))}
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               autoFocus
             />
             <button
               type="submit"
               disabled={!customDistance || customDistance <= 0}
-              className="px-4 py-1.5 bg-[#F95A00] text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50"
+              className="px-4 py-1.5 bg-[#FF6B00] text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50"
             >
               Add KM
             </button>
@@ -198,9 +198,9 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
                 sounds.playSuccess();
                 onAddKm(km);
               }}
-              className="py-2 px-1 text-center bg-white hover:bg-orange-50 border border-slate-100 hover:border-orange-200 rounded-xl text-xs font-medium text-slate-600 hover:text-[#F95A00] shadow-sm transition-all"
+              className="py-2 px-1 text-center bg-white hover:bg-orange-50 border border-slate-100 hover:border-orange-200 rounded-xl text-xs font-medium text-slate-600 hover:text-[#FF6B00] shadow-sm transition-all"
             >
-              <span className="text-[#F95A00] font-bold mr-0.5">+</span> +{km}
+              <span className="text-[#FF6B00] font-bold mr-0.5">+</span> +{km}
             </button>
           ))}
 
@@ -210,7 +210,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
             onClick={() => setShowCustomInput(true)}
             className="py-2 px-1 text-center bg-amber-50/70 hover:bg-amber-100 border border-amber-200/80 rounded-xl text-xs font-bold text-amber-700 shadow-sm flex items-center justify-center gap-0.5 transition-all"
           >
-            <SlidersHorizontal className="w-3 h-3 text-[#F95A00]" />
+            <SlidersHorizontal className="w-3 h-3 text-[#FF6B00]" />
             <span>+ Custom</span>
           </button>
         </div>
@@ -244,14 +244,14 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           }}
           className={`pb-3 px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative ${
             activeTab === 'garage' || activeTab === 'reminders'
-              ? 'text-[#F95A00]'
+              ? 'text-[#FF6B00]'
               : 'text-slate-400 hover:text-slate-700'
           }`}
         >
           <Wrench className="w-4 h-4" />
           <span>Schedule</span>
           {(activeTab === 'garage' || activeTab === 'reminders') && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#F95A00] rounded-full" />
+            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#FF6B00] rounded-full" />
           )}
         </button>
 
@@ -263,14 +263,14 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           }}
           className={`pb-3 px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative ${
             activeTab === 'logbook'
-              ? 'text-[#F95A00]'
+              ? 'text-[#FF6B00]'
               : 'text-slate-400 hover:text-slate-700'
           }`}
         >
           <Clock className="w-4 h-4" />
           <span>History</span>
           {activeTab === 'logbook' && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#F95A00] rounded-full" />
+            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#FF6B00] rounded-full" />
           )}
         </button>
 
@@ -282,14 +282,14 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           }}
           className={`pb-3 px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative ${
             activeTab === 'lto'
-              ? 'text-[#F95A00]'
+              ? 'text-[#FF6B00]'
               : 'text-slate-400 hover:text-slate-700'
           }`}
         >
           <Bike className="w-4 h-4" />
           <span>Garage / LTO</span>
           {activeTab === 'lto' && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#F95A00] rounded-full" />
+            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#FF6B00] rounded-full" />
           )}
         </button>
       </div>

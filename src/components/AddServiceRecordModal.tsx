@@ -138,7 +138,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
           <div className="flex items-center gap-2">
-            <Wrench className="w-5 h-5 text-[#F95A00]" />
+            <Wrench className="w-5 h-5 text-[#FF6B00]" />
             <h3 className="text-base font-extrabold text-slate-900">Log Completed Service</h3>
           </div>
           <button
@@ -161,7 +161,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
               placeholder="e.g. Engine Oil Change (Yamalube AT Blue Core)"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
           </div>
 
@@ -175,7 +175,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
 
@@ -189,7 +189,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                 required
                 value={odometer}
                 onChange={(e) => setOdometer(Number(e.target.value) || 0)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
           </div>
@@ -202,7 +202,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as ServiceCategory)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               >
                 <option value="Engine Oil">Engine Oil Service</option>
                 <option value="Gear Oil">Gear Oil (Scooter)</option>
@@ -232,7 +232,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                     setIsCasaVerified(true);
                   }
                 }}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               >
                 <option value="Casa / Official 3S">Official Casa / 3S Center</option>
                 <option value="Independent Shop">Independent Workshop</option>
@@ -252,7 +252,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                 list="shop-list"
                 value={shopName}
                 onChange={(e) => setShopName(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
               <datalist id="shop-list">
                 {PHILIPPINE_SHOPS.map((s, idx) => (
@@ -273,7 +273,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                 list="oil-list"
                 value={oilBrandGrade}
                 onChange={(e) => setOilBrandGrade(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
               <datalist id="oil-list">
                 {OIL_GRADES.map((o, idx) => (
@@ -294,7 +294,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                 placeholder="e.g. OR-84920"
                 value={receiptNumber}
                 onChange={(e) => setReceiptNumber(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2 text-xs font-mono text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2 text-xs font-mono text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
 
@@ -304,7 +304,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                   type="checkbox"
                   checked={isCasaVerified}
                   onChange={(e) => setIsCasaVerified(e.target.checked)}
-                  className="rounded text-[#F95A00] focus:ring-0"
+                  className="rounded text-[#FF6B00] focus:ring-0"
                 />
                 <span className="flex items-center gap-1 font-bold text-emerald-600">
                   <ShieldCheck className="w-3.5 h-3.5" /> Casa Verified Stamp
@@ -316,13 +316,13 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
           {/* Reset Linked Reminder */}
           <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
             <div className="flex items-center gap-1.5 text-xs text-slate-700 font-bold mb-1">
-              <Link className="w-3.5 h-3.5 text-[#F95A00]" />
+              <Link className="w-3.5 h-3.5 text-[#FF6B00]" />
               Auto-Reset Scheduled Task
             </div>
             <select
               value={linkedReminderId}
               onChange={(e) => setLinkedReminderId(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             >
               <option value="">-- None (Standalone Service Entry) --</option>
               {reminders
@@ -344,7 +344,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
               <button
                 type="button"
                 onClick={handleAddPart}
-                className="text-[11px] text-[#F95A00] hover:underline flex items-center gap-1 font-bold"
+                className="text-[11px] text-[#FF6B00] hover:underline flex items-center gap-1 font-bold"
               >
                 <Plus className="w-3 h-3" /> Add Item
               </button>
@@ -358,7 +358,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                     placeholder="Part item description"
                     value={part.name}
                     onChange={(e) => handlePartChange(idx, 'name', e.target.value)}
-                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
                   />
                   <div className="relative w-28 shrink-0">
                     <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-mono">₱</span>
@@ -367,7 +367,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                       min="0"
                       value={part.costPhp || ''}
                       onChange={(e) => handlePartChange(idx, 'costPhp', e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-6 pr-2 py-1.5 text-xs font-mono font-bold text-slate-800 text-right focus:outline-none focus:border-[#F95A00]"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-6 pr-2 py-1.5 text-xs font-mono font-bold text-slate-800 text-right focus:outline-none focus:border-[#FF6B00]"
                     />
                   </div>
                   {parts.length > 1 && (
@@ -397,14 +397,14 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                   min="0"
                   value={laborCostPhp}
                   onChange={(e) => setLaborCostPhp(Number(e.target.value) || 0)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-6 pr-2 py-1.5 text-xs font-mono font-bold text-slate-800 text-right focus:outline-none focus:border-[#F95A00]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-6 pr-2 py-1.5 text-xs font-mono font-bold text-slate-800 text-right focus:outline-none focus:border-[#FF6B00]"
                 />
               </div>
             </div>
 
             <div className="text-right">
               <div className="text-xs text-slate-500 mb-1">Total Paid (PHP)</div>
-              <div className="text-xl font-extrabold font-mono text-[#F95A00] tabular-nums">
+              <div className="text-xl font-extrabold font-mono text-[#FF6B00] tabular-nums">
                 ₱{totalCostPhp.toLocaleString()}
               </div>
             </div>
@@ -421,7 +421,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 text-xs font-bold text-white bg-[#F95A00] hover:bg-[#EA580C] rounded-2xl transition-all shadow-md shadow-[#F95A00]/25"
+              className="px-5 py-2.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-2xl transition-all shadow-md shadow-[#FF6B00]/25"
             >
               Save to Service Logbook
             </button>

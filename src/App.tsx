@@ -6,8 +6,7 @@ import {
   ActiveTab,
   UserSubscription,
   PaymentMethod,
-  PaymentSubmission,
-  AppNotification,
+  UserAccount,
 } from './types';
 import {
   loadMotorcycles,
@@ -24,13 +23,9 @@ import {
   saveQuickKmPresets,
   resetAllToDefault,
   analyzeReminder,
-  loadPaymentSubmissions,
-  savePaymentSubmissions,
-  loadAppNotifications,
-  saveAppNotifications,
-  loadAutoKmConfig,
-  saveAutoKmConfig,
-  AutoKmConfig,
+  loadUserAccounts,
+  saveUserAccounts,
+  INITIAL_USER_ACCOUNTS,
 } from './utils/storage';
 import { sounds } from './utils/audio';
 
@@ -44,14 +39,8 @@ import { OnboardingView } from './components/OnboardingView';
 import { GpsRideTrackerSheet } from './components/GpsRideTrackerSheet';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OverdueAlertBanner } from './components/OverdueAlertBanner';
-import { AdminDashboard } from './components/AdminDashboard';
-import { AutoKmTracker } from './components/AutoKmTracker';
-import {
-  triggerOverdueAlert,
-  triggerPaymentApprovedAlert,
-  triggerPaymentSubmittedAlert,
-  triggerAutoKmAlert,
-} from './utils/notifications';
+import { triggerOverdueAlert } from './utils/notifications';
+import { AdminUsersPortal } from './components/AdminUsersPortal';
 
 // Modals
 import { QuickAddOdometerModal } from './components/QuickAddOdometerModal';
@@ -72,9 +61,16 @@ export default function App() {
   const [serviceRecords, setServiceRecords] = React.useState<ServiceRecord[]>(() => loadServiceRecords());
   const [subscription, setSubscription] = React.useState<UserSubscription>(() => loadSubscription());
   const [quickPresets, setQuickPresets] = React.useState<number[]>(() => loadQuickKmPresets());
-  const [submissions, setSubmissions] = React.useState<PaymentSubmission[]>(() => loadPaymentSubmissions());
-  const [notifications, setNotifications] = React.useState<AppNotification[]>(() => loadAppNotifications());
-  const [autoKmConfig, setAutoKmConfig] = React.useState<AutoKmConfig>(() => loadAutoKmConfig());
+
+  // Admin User Accounts & Standalone Portal URL state
+  const [userAccounts, setUserAccounts] = React.useState<UserAccount[]>(() => loadUserAccounts());
+  const [isAdminPortal, setIsAdminPortal] = React.useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.hash === '#admin' ||
+      new URLSearchParams(window.location.search).get('admin') === 'true'
+    );
+  });
 
   // Active Tab
   const [activeTab, setActiveTab] = React.useState<ActiveTab>('garage');
@@ -95,6 +91,22 @@ export default function App() {
   const [isGpsModalOpen, setIsGpsModalOpen] = React.useState(false);
   const [isOverdueBannerDismissed, setIsOverdueBannerDismissed] = React.useState(false);
   const alertedOverdueIds = React.useRef<Set<string>>(new Set());
+
+  // Listen to hash and URL query changes (for direct #admin link)
+  React.useEffect(() => {
+    const handleUrlChange = () => {
+      const isHash = window.location.hash === '#admin';
+      const isQuery = new URLSearchParams(window.location.search).get('admin') === 'true';
+      setIsAdminPortal(isHash || isQuery);
+    };
+
+    window.addEventListener('hashchange', handleUrlChange);
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('hashchange', handleUrlChange);
+      window.removeEventListener('popstate', handleUrlChange);
+    };
+  }, []);
 
   // Sync to local storage
   React.useEffect(() => {
@@ -118,16 +130,8 @@ export default function App() {
   }, [quickPresets]);
 
   React.useEffect(() => {
-    savePaymentSubmissions(submissions);
-  }, [submissions]);
-
-  React.useEffect(() => {
-    saveAppNotifications(notifications);
-  }, [notifications]);
-
-  React.useEffect(() => {
-    saveAutoKmConfig(autoKmConfig);
-  }, [autoKmConfig]);
+    saveUserAccounts(userAccounts);
+  }, [userAccounts]);
 
   React.useEffect(() => {
     if (activeBikeId) {
@@ -250,137 +254,87 @@ export default function App() {
     setServiceRecords(serviceRecords.filter((r) => r.id !== recordId));
   };
 
-  const handleApprovePayment = (submissionId: string) => {
-    const sub = submissions.find((s) => s.id === submissionId);
-    if (!sub) return;
-
-    setSubmissions((prev) =>
-      prev.map((s) =>
-        s.id === submissionId
-          ? {
-              ...s,
-              status: 'approved',
-              approvedAt: new Date().toISOString(),
-              reviewedBy: 'Admin (System)',
-            }
-          : s
-      )
-    );
-
-    // If this submission belongs to the current user or is active, upgrade user to Pro
-    setSubscription({
-      tier: 'pro',
-      plan: 'monthly',
-      status: 'active',
-      paymentMethod: sub.paymentMethod,
-      referenceNumber: sub.referenceNumber,
-      submissionId: sub.id,
-    });
-
-    triggerPaymentApprovedAlert(sub.referenceNumber);
-
-    const approvedNotif: AppNotification = {
-      id: `notif-approved-${Date.now()}`,
-      type: 'payment_approved',
-      title: '🎉 Pro Access Approved!',
-      message: `Your payment (Ref #${sub.referenceNumber}) has been confirmed! VIP Pro features are now unlocked.`,
-      timestamp: new Date().toISOString(),
-      urgency: 'high',
-      isRead: false,
-      actionLabel: 'Explore Garage',
-      actionPayload: { tab: 'garage' },
-    };
-    setNotifications((prev) => [approvedNotif, ...prev]);
+  const handleOpenAdminPortal = () => {
+    sounds.playClick();
+    window.location.hash = 'admin';
+    setIsAdminPortal(true);
   };
 
-  const handleRejectPayment = (submissionId: string, reason = 'Reference number could not be verified') => {
-    setSubmissions((prev) =>
-      prev.map((s) =>
-        s.id === submissionId
+  const handleCloseAdminPortal = () => {
+    sounds.playClick();
+    if (window.location.hash === '#admin') {
+      window.history.pushState(null, '', window.location.pathname);
+    }
+    setIsAdminPortal(false);
+  };
+
+  const handleApprovePro = (userId: string) => {
+    setUserAccounts((prev) =>
+      prev.map((u) =>
+        u.id === userId
           ? {
-              ...s,
-              status: 'rejected',
-              notes: reason,
-              reviewedBy: 'Admin (System)',
+              ...u,
+              subscriptionTier: 'pro',
+              paymentStatus: 'active_pro',
+              approvedAt: new Date().toISOString(),
+              approvedBy: 'Admin (Manual)',
             }
-          : s
+          : u
       )
     );
 
-    // If matches current user subscription, reset to free
-    if (subscription.submissionId === submissionId || subscription.status === 'pending_verification') {
+    // If approving the active rider or user-001, unlock Pro in the active app
+    const target = userAccounts.find((u) => u.id === userId);
+    if (
+      target &&
+      (target.id === 'user-001' ||
+        target.email === 'mustetm7@gmail.com' ||
+        (activeBike && target.bikeModel.toLowerCase().includes(activeBike.model.toLowerCase())))
+    ) {
+      setSubscription({
+        tier: 'pro',
+        plan: 'monthly',
+        status: 'active',
+        paymentMethod: target.paymentMethod || 'gcash',
+        referenceNumber: target.referenceNumber,
+      });
+    }
+  };
+
+  const handleRevokePro = (userId: string) => {
+    setUserAccounts((prev) =>
+      prev.map((u) =>
+        u.id === userId
+          ? {
+              ...u,
+              subscriptionTier: 'free',
+              paymentStatus: 'unpaid_free',
+            }
+          : u
+      )
+    );
+
+    const target = userAccounts.find((u) => u.id === userId);
+    if (target && (target.id === 'user-001' || target.email === 'mustetm7@gmail.com')) {
       setSubscription({
         tier: 'free',
         plan: null,
         status: 'free',
       });
     }
-
-    const rejectNotif: AppNotification = {
-      id: `notif-rejected-${Date.now()}`,
-      type: 'payment_rejected',
-      title: 'Payment Verification Notice',
-      message: `Payment submission was marked rejected: ${reason}. Please re-submit reference code.`,
-      timestamp: new Date().toISOString(),
-      urgency: 'medium',
-      isRead: false,
-      actionLabel: 'Re-submit Payment',
-      actionPayload: { tab: 'garage' },
-    };
-    setNotifications((prev) => [rejectNotif, ...prev]);
   };
 
-  const handleCreateMockPayment = () => {
-    const mockRef = `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
-    const mockSub: PaymentSubmission = {
-      id: `sub-${Date.now()}`,
-      referenceNumber: mockRef,
-      amountPhp: 49,
-      paymentMethod: 'gcash',
-      bikeNickname: 'Daily Clicker',
-      bikeModel: '2025 Honda Click 125i',
-      userName: 'Carlo Mendoza',
-      userEmail: 'carlo.mendoza@example.ph',
-      submittedAt: new Date().toISOString(),
-      status: 'pending',
-      notes: `Paid ₱49 via GCash QRPH. Ref #${mockRef}.`,
+  const handleAddUser = (user: Omit<UserAccount, 'id' | 'registeredAt'>) => {
+    const newUser: UserAccount = {
+      ...user,
+      id: `user-${Date.now().toString(36)}`,
+      registeredAt: new Date().toISOString().split('T')[0],
     };
-
-    setSubmissions((prev) => [mockSub, ...prev]);
-
-    const notif: AppNotification = {
-      id: `notif-sub-${Date.now()}`,
-      type: 'payment_pending',
-      title: 'New Payment Pending Review',
-      message: `Rider submitted ₱49 via GCash (Ref #${mockRef}). Confirm in Admin.`,
-      timestamp: new Date().toISOString(),
-      urgency: 'high',
-      isRead: false,
-      actionLabel: 'Review in Admin',
-      actionPayload: { tab: 'admin' },
-    };
-    setNotifications((prev) => [notif, ...prev]);
+    setUserAccounts((prev) => [newUser, ...prev]);
   };
 
-  const handleAutoAddKm = (km: number) => {
-    if (!activeBike?.id) return;
-    const newOdo = activeBike.odometer + km;
-    handleUpdateOdometer(newOdo);
-
-    triggerAutoKmAlert(activeBike.nickname || activeBike.model, km, newOdo);
-
-    const autoNotif: AppNotification = {
-      id: `notif-autokm-${Date.now()}`,
-      type: 'auto_km_added',
-      title: `🛵 +${km} km Auto-Logged (5m Inactivity)`,
-      message: `Added +${km} km to ${activeBike.nickname || activeBike.model} after 5 minutes of no action. Current odo: ${newOdo.toLocaleString()} km.`,
-      timestamp: new Date().toISOString(),
-      urgency: 'info',
-      isRead: false,
-      actionLabel: 'Review Odometer',
-      actionPayload: { tab: 'garage', addedKm: km, newOdo },
-    };
-    setNotifications((prev) => [autoNotif, ...prev]);
+  const handleResetUsersToDefault = () => {
+    setUserAccounts(INITIAL_USER_ACCOUNTS);
   };
 
   const handleSubscribe = (
@@ -389,54 +343,61 @@ export default function App() {
     referenceNumber?: string
   ) => {
     const refCode = referenceNumber || `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
-    const newSub: PaymentSubmission = {
-      id: `sub-${Date.now()}`,
-      referenceNumber: refCode,
-      amountPhp: 49,
-      paymentMethod,
-      bikeNickname: activeBike.nickname,
-      bikeModel: `${activeBike.brand} ${activeBike.model}`,
-      userName: 'Current Rider',
-      userEmail: 'subscriber@motocare.ph',
-      submittedAt: new Date().toISOString(),
-      status: 'pending',
-      notes: `Submitted via in-app payment modal. Awaiting Admin verification.`,
-    };
-
-    setSubmissions((prev) => [newSub, ...prev]);
-
     setSubscription({
-      tier: 'free',
-      plan: 'monthly',
-      status: 'pending_verification',
+      tier: 'pro',
+      plan,
+      status: 'active',
       paymentMethod,
       referenceNumber: refCode,
-      submissionId: newSub.id,
     });
 
-    triggerPaymentSubmittedAlert(refCode, paymentMethod);
-
-    const pendingNotif: AppNotification = {
-      id: `notif-pending-${Date.now()}`,
-      type: 'payment_pending',
-      title: 'Payment Submitted for Verification',
-      message: `₱49 payment (${paymentMethod.toUpperCase()} Ref #${refCode}) submitted. Admin approval pending.`,
-      timestamp: new Date().toISOString(),
-      urgency: 'high',
-      isRead: false,
-      actionLabel: 'Open Admin Portal',
-      actionPayload: { tab: 'admin' },
-    };
-    setNotifications((prev) => [pendingNotif, ...prev]);
+    // Sync into userAccounts so admin can inspect the payment
+    setUserAccounts((prev) =>
+      prev.map((u) =>
+        u.id === 'user-001' || u.email === 'mustetm7@gmail.com'
+          ? {
+              ...u,
+              subscriptionTier: 'pro',
+              paymentStatus: 'active_pro',
+              paymentMethod,
+              referenceNumber: refCode,
+              amountPhp: 49,
+              lastPaymentDate: new Date().toISOString(),
+              approvedAt: new Date().toISOString(),
+              approvedBy: 'Instant / In-App',
+            }
+          : u
+      )
+    );
   };
 
-  const handleClearNotifications = () => {
-    sounds.playClick();
-    setNotifications([]);
-  };
+  const currentRider = userAccounts.find(
+    (u) => u.id === 'user-001' || u.email === 'mustetm7@gmail.com'
+  );
+  const isPendingApproval = currentRider?.paymentStatus === 'pending_approval';
+  const pendingReference = currentRider?.referenceNumber;
 
-  const handleMarkNotificationRead = (id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+  const handleSubmitPendingPayment = (
+    paymentMethod: PaymentMethod,
+    referenceNumber: string
+  ) => {
+    const refCode = referenceNumber.trim() || `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
+    setUserAccounts((prev) =>
+      prev.map((u) =>
+        u.id === 'user-001' || u.email === 'mustetm7@gmail.com'
+          ? {
+              ...u,
+              subscriptionTier: 'free',
+              paymentStatus: 'pending_approval',
+              paymentMethod,
+              referenceNumber: refCode,
+              amountPhp: 49,
+              lastPaymentDate: new Date().toISOString(),
+              notes: 'Submitted via Paywall. Awaiting Admin manual approval.',
+            }
+          : u
+      )
+    );
   };
 
   const handleCancelSubscription = () => {
@@ -473,8 +434,21 @@ export default function App() {
     sounds.playSuccess();
   };
 
+  if (isAdminPortal) {
+    return (
+      <AdminUsersPortal
+        users={userAccounts}
+        onApprovePro={handleApprovePro}
+        onRevokePro={handleRevokePro}
+        onAddUser={handleAddUser}
+        onResetUsersToDefault={handleResetUsersToDefault}
+        onReturnToApp={handleCloseAdminPortal}
+      />
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-slate-900 flex flex-col font-sans selection:bg-[#F95A00] selection:text-white">
+    <div className="min-h-screen bg-[#F8F9FA] text-slate-900 flex flex-col font-sans selection:bg-[#FF6B00] selection:text-white">
       {/* Top Navbar matching screenshots */}
       <Navbar
         activeTab={activeTab}
@@ -482,8 +456,6 @@ export default function App() {
         motorcycles={motorcycles}
         activeBike={activeBike}
         subscription={subscription}
-        notifications={notifications}
-        submissions={submissions}
         onToggleDemoTier={handleToggleDemoTier}
         onSelectBike={handleSelectBike}
         onOpenAddBike={() => {
@@ -504,8 +476,6 @@ export default function App() {
           setMotorcycles([]);
           setActiveBikeId('');
         }}
-        onClearNotifications={handleClearNotifications}
-        onMarkNotificationRead={handleMarkNotificationRead}
         overdueCount={overdueCount}
         overdueReminders={overdueReminders}
         onOpenServiceForReminder={(rem) => {
@@ -572,7 +542,7 @@ export default function App() {
                       setEditingReminder(null);
                       setIsReminderModalOpen(true);
                     }}
-                    className="text-xs font-bold text-[#F95A00] hover:underline flex items-center gap-1"
+                    className="text-xs font-bold text-[#FF6B00] hover:underline flex items-center gap-1"
                   >
                     <span>+ Add Task</span>
                   </button>
@@ -637,22 +607,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Admin Dashboard: Payment Approvals & Auto-Km Rules Engine */}
-            {activeTab === 'admin' && (
-              <AdminDashboard
-                submissions={submissions}
-                activeBike={activeBike}
-                subscription={subscription}
-                autoKmConfig={autoKmConfig}
-                onApprovePayment={handleApprovePayment}
-                onRejectPayment={handleRejectPayment}
-                onCreateMockPayment={handleCreateMockPayment}
-                onUpdateAutoKmConfig={setAutoKmConfig}
-                onTriggerAutoKmNow={() => handleAutoAddKm(autoKmConfig.incrementKm)}
-                onBack={() => setActiveTab('garage')}
-              />
-            )}
-
             {/* Floating Action Button (+ New Task) matching screenshots 2, 3, 4 */}
             {(activeTab === 'garage' || activeTab === 'reminders') && (
               <div className="fixed bottom-6 right-4 sm:right-auto sm:left-1/2 sm:translate-x-28 z-30">
@@ -663,7 +617,7 @@ export default function App() {
                     setEditingReminder(null);
                     setIsReminderModalOpen(true);
                   }}
-                  className="px-5 py-3 rounded-2xl bg-[#F95A00] hover:bg-[#EA580C] text-white font-bold text-xs shadow-xl shadow-[#F95A00]/35 flex items-center gap-1.5 transition-all active:scale-95 hover:scale-105"
+                  className="px-5 py-3 rounded-2xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-bold text-xs shadow-xl shadow-[#FF6B00]/35 flex items-center gap-1.5 transition-all active:scale-95 hover:scale-105"
                 >
                   <Plus className="w-4 h-4 stroke-[3]" />
                   <span>New Task</span>
@@ -672,16 +626,26 @@ export default function App() {
             )}
           </>
         )}
-      </main>
 
-      {/* Auto-Commute Inactivity Odometer Tracker (5-minute rule) */}
-      <AutoKmTracker
-        bike={activeBike}
-        enabled={autoKmConfig.enabled}
-        intervalMinutes={autoKmConfig.intervalMinutes}
-        incrementKm={autoKmConfig.incrementKm}
-        onAutoAddKm={handleAutoAddKm}
-      />
+        {/* Discreet Admin Portal Link for direct access */}
+        <footer className="pt-8 pb-4 text-center text-xs text-slate-400">
+          <div className="flex flex-col items-center justify-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleOpenAdminPortal}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 font-medium transition-all text-[11px] border border-slate-200/80 shadow-xs cursor-pointer active:scale-95"
+              title="Open Admin Dashboard to verify GCash/GoTyme QR payments and manually approve PRO"
+            >
+              <span className="text-xs">🔒</span>
+              <span>Admin Portal</span>
+              <span className="text-[10px] text-slate-400 bg-white px-1.5 py-0.5 rounded font-mono border border-slate-200">#admin</span>
+            </button>
+            <p className="text-[10px] text-slate-400">
+              MotoCare PH • Separate link: <a href="#admin" onClick={handleOpenAdminPortal} className="font-mono text-slate-500 hover:underline">/#admin</a>
+            </p>
+          </div>
+        </footer>
+      </main>
 
       {/* Modals */}
       <QuickAddOdometerModal
@@ -733,10 +697,9 @@ export default function App() {
         subscription={subscription}
         onSubscribe={handleSubscribe}
         onCancelSubscription={handleCancelSubscription}
-        onOpenAdmin={() => {
-          setIsPaywallOpen(false);
-          setActiveTab('admin');
-        }}
+        onSubmitPendingPayment={handleSubmitPendingPayment}
+        isPendingApproval={isPendingApproval}
+        pendingReference={pendingReference}
       />
 
       {/* GPS Ride Tracker Modal */}

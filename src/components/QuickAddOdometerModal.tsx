@@ -70,7 +70,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <div className="flex items-center gap-2">
-            <Gauge className="w-5 h-5 text-[#F95A00]" />
+            <Gauge className="w-5 h-5 text-[#FF6B00]" />
             <h3 className="text-base font-extrabold text-slate-900">Update Odometer</h3>
           </div>
           <button
@@ -92,7 +92,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
             </div>
             <div className="text-right">
               <div className="text-[10px] text-slate-400 uppercase font-mono">Current Mileage</div>
-              <div className="text-lg font-black font-mono text-[#F95A00] tabular-nums">
+              <div className="text-lg font-black font-mono text-[#FF6B00] tabular-nums">
                 {bike.odometer.toLocaleString()} km
               </div>
             </div>
@@ -113,7 +113,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
                     setIsEditingPresets(true);
                   }
                 }}
-                className="text-[11px] text-[#F95A00] hover:underline flex items-center gap-1 font-bold"
+                className="text-[11px] text-[#FF6B00] hover:underline flex items-center gap-1 font-bold"
               >
                 {isEditingPresets ? (
                   <>
@@ -140,7 +140,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
                       updated[idx] = Number(e.target.value) || 1;
                       setEditablePresets(updated);
                     }}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-center text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-center text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
                   />
                 ))}
               </div>
@@ -153,8 +153,8 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
                     onClick={() => handleAddKm(km)}
                     className="p-2.5 rounded-2xl bg-white hover:bg-orange-50 border border-slate-200 hover:border-orange-300 text-center transition-all group shadow-2xs"
                   >
-                    <div className="text-sm font-bold font-mono text-slate-800 group-hover:text-[#F95A00] flex items-center justify-center gap-0.5">
-                      <Plus className="w-3 h-3 text-[#F95A00]" />
+                    <div className="text-sm font-bold font-mono text-slate-800 group-hover:text-[#FF6B00] flex items-center justify-center gap-0.5">
+                      <Plus className="w-3 h-3 text-[#FF6B00]" />
                       {km}
                     </div>
                     <div className="text-[9px] text-slate-400">km ride</div>
@@ -179,7 +179,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
                   placeholder="e.g. 24.5"
                   value={customAddKm}
                   onChange={(e) => setCustomAddKm(e.target.value === '' ? '' : Number(e.target.value))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-7 pr-12 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-7 pr-12 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
                 />
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-mono text-slate-400">
                   km
@@ -188,7 +188,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
               <button
                 type="submit"
                 disabled={!customAddKm || customAddKm <= 0}
-                className="px-4 py-2 bg-[#F95A00] hover:bg-[#EA580C] disabled:opacity-40 text-white font-bold text-xs rounded-2xl transition-all flex items-center gap-1 shadow-sm"
+                className="px-4 py-2 bg-[#FF6B00] hover:bg-[#EA580C] disabled:opacity-40 text-white font-bold text-xs rounded-2xl transition-all flex items-center gap-1 shadow-sm"
               >
                 Add <ArrowRight className="w-3.5 h-3.5" />
               </button>
@@ -208,7 +208,7 @@ export const QuickAddOdometerModal: React.FC<QuickAddOdometerModalProps> = ({
                 required
                 value={directOdo}
                 onChange={(e) => setDirectOdo(Number(e.target.value) || 0)}
-                className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-sm font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 text-sm font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
               <button
                 type="submit"

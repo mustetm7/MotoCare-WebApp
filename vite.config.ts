@@ -18,7 +18,7 @@ export default defineConfig(() => {
           name: 'MotoCare - Motorcycle Maintenance',
           short_name: 'MotoCare',
           description: 'Philippine motorcycle garage, PMS maintenance reminders, and ride tracker.',
-          theme_color: '#F95A00',
+          theme_color: '#FF6B00',
           background_color: '#FFFFFF',
           display: 'standalone',
           orientation: 'portrait',

@@ -17,7 +17,7 @@ interface GarageModalProps {
 }
 
 const COLOR_SWATCHES = [
-  '#F95A00', // Orange
+  '#FF6B00', // Orange
   '#EF4444', // Red-Orange
   '#2563EB', // Blue
   '#10B981', // Green
@@ -97,7 +97,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
         <div className="w-full max-w-md bg-white rounded-3xl p-6 text-center space-y-4 shadow-2xl border border-slate-100">
-          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-[#F95A00] flex items-center justify-center mx-auto">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-[#FF6B00] flex items-center justify-center mx-auto">
             <Sparkles className="w-6 h-6" />
           </div>
           <h3 className="text-xl font-extrabold text-slate-900">
@@ -120,7 +120,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                 onClose();
                 onOpenPaywall?.();
               }}
-              className="flex-1 py-3 text-xs font-bold text-white bg-[#F95A00] hover:bg-[#EA580C] rounded-2xl shadow-md shadow-[#F95A00]/25"
+              className="flex-1 py-3 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-2xl shadow-md shadow-[#FF6B00]/25"
             >
               Upgrade to Pro (₱49/mo)
             </button>
@@ -252,7 +252,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               value={brand}
               onChange={(e) => setBrand(e.target.value)}
               required
-              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
             {/* Quick Brand Pills */}
             <div className="flex flex-wrap gap-1.5 pt-1">
@@ -263,7 +263,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                   onClick={() => handleBrandSelect(b)}
                   className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors ${
                     brand.toLowerCase() === b.toLowerCase()
-                      ? 'bg-[#F95A00] text-white shadow-sm'
+                      ? 'bg-[#FF6B00] text-white shadow-sm'
                       : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
                   }`}
                 >
@@ -281,7 +281,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               value={model}
               onChange={(e) => setModel(e.target.value)}
               required
-              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
             {/* Quick Model Pills matching screenshot */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar pt-1">
@@ -313,7 +313,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                 value={year}
                 onChange={(e) => setYear(Number(e.target.value))}
                 required
-                className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
 
@@ -327,7 +327,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                   onChange={(e) => setOdometer(Number(e.target.value))}
                   required
                   placeholder="e.g. 5200"
-                  className="w-full bg-white border border-slate-200 rounded-2xl px-4 pr-10 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                  className="w-full bg-white border border-slate-200 rounded-2xl px-4 pr-10 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
                 />
                 <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-amber-600">
                   {unit}
@@ -343,7 +343,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               type="button"
               onClick={() => setUnit('km')}
               className={`px-3 py-1 rounded-xl font-bold ${
-                unit === 'km' ? 'bg-[#F95A00] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                unit === 'km' ? 'bg-[#FF6B00] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               Kilometers (km)
@@ -352,7 +352,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               type="button"
               onClick={() => setUnit('mi')}
               className={`px-3 py-1 rounded-xl font-bold ${
-                unit === 'mi' ? 'bg-[#F95A00] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                unit === 'mi' ? 'bg-[#FF6B00] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               Miles (mi)
@@ -367,7 +367,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               value={displacementCc}
               onChange={(e) => setDisplacementCc(Number(e.target.value))}
               placeholder="155"
-              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
           </div>
 
@@ -379,7 +379,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               value={licensePlate}
               onChange={(e) => setLicensePlate(e.target.value)}
               placeholder="e.g. 123ABC or 1234-567890"
-              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
           </div>
 
@@ -394,7 +394,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                   onClick={() => setMotorcycleType(type)}
                   className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors ${
                     motorcycleType === type
-                      ? 'bg-[#F95A00] text-white shadow-sm'
+                      ? 'bg-[#FF6B00] text-white shadow-sm'
                       : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
                   }`}
                 >
@@ -412,7 +412,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
               placeholder="e.g. Red Rocket, Daily Ride, Beast"
-              className="w-full bg-white border-2 border-[#F95A00] rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none shadow-sm"
+              className="w-full bg-white border-2 border-[#FF6B00] rounded-2xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none shadow-sm"
             />
           </div>
 
@@ -476,7 +476,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
           <div className="pt-3">
             <button
               type="submit"
-              className="w-full py-3.5 bg-[#F95A00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#F95A00]/25 transition-all flex items-center justify-center gap-1.5 active:scale-98"
+              className="w-full py-3.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#FF6B00]/25 transition-all flex items-center justify-center gap-1.5 active:scale-98"
             >
               <span>+</span>
               <span>{isEditing ? 'Save Changes' : 'Register to Garage'}</span>

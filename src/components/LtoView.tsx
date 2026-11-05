@@ -38,9 +38,9 @@ export const LtoView: React.FC<LtoViewProps> = ({
             sounds.playClick();
             onBack();
           }}
-          className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#F95A00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#F95A00] shadow-2xs group"
+          className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#FF6B00] shadow-2xs group"
         >
-          <ArrowLeft className="w-4 h-4 text-[#F95A00] group-hover:-translate-x-0.5 transition-transform" />
+          <ArrowLeft className="w-4 h-4 text-[#FF6B00] group-hover:-translate-x-0.5 transition-transform" />
           <span>Back to Schedule</span>
         </button>
 
@@ -70,11 +70,11 @@ export const LtoView: React.FC<LtoViewProps> = ({
             placeholder="e.g. ND 8492"
             value={plateInput}
             onChange={(e) => setPlateInput(e.target.value.toUpperCase())}
-            className="w-32 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-slate-900 uppercase text-center focus:outline-none focus:border-[#F95A00]"
+            className="w-32 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-slate-900 uppercase text-center focus:outline-none focus:border-[#FF6B00]"
           />
           <button
             type="submit"
-            className="px-3 py-1.5 text-xs font-bold bg-[#F95A00] text-white rounded-xl shadow-2xs hover:bg-[#EA580C]"
+            className="px-3 py-1.5 text-xs font-bold bg-[#FF6B00] text-white rounded-xl shadow-2xs hover:bg-[#EA580C]"
           >
             Update
           </button>
@@ -94,7 +94,7 @@ export const LtoView: React.FC<LtoViewProps> = ({
             </div>
             <div className="flex items-center justify-between text-[8px] font-bold text-slate-400 pt-1 border-t border-slate-100">
               <span>MC REGISTERED</span>
-              <span className="text-[#F95A00] font-mono">LTO PH</span>
+              <span className="text-[#FF6B00] font-mono">LTO PH</span>
             </div>
           </div>
 
@@ -134,7 +134,7 @@ export const LtoView: React.FC<LtoViewProps> = ({
 
               <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-100">
                 <div className="text-[10px] text-slate-400 uppercase font-bold">Countdown</div>
-                <div className="font-extrabold font-mono text-[#F95A00] mt-0.5">{renewalInfo.daysRemaining} days</div>
+                <div className="font-extrabold font-mono text-[#FF6B00] mt-0.5">{renewalInfo.daysRemaining} days</div>
               </div>
             </div>
           </div>
@@ -144,7 +144,7 @@ export const LtoView: React.FC<LtoViewProps> = ({
       {/* LTO Checklist */}
       <div className="p-5 rounded-3xl bg-white border border-slate-100 shadow-sm space-y-3">
         <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-          <FileText className="w-4 h-4 text-[#F95A00]" />
+          <FileText className="w-4 h-4 text-[#FF6B00]" />
           Motorcycle LTO Renewal Requirements
         </h3>
 

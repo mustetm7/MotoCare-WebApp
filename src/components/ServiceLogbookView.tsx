@@ -59,9 +59,9 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
             sounds.playClick();
             onBack();
           }}
-          className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#F95A00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#F95A00] shadow-2xs group"
+          className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#FF6B00] shadow-2xs group"
         >
-          <ArrowLeft className="w-4 h-4 text-[#F95A00] group-hover:-translate-x-0.5 transition-transform" />
+          <ArrowLeft className="w-4 h-4 text-[#FF6B00] group-hover:-translate-x-0.5 transition-transform" />
           <span>Back to Schedule</span>
         </button>
 
@@ -93,7 +93,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
 
           <button
             onClick={onOpenAddService}
-            className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#F95A00] hover:bg-[#EA580C] rounded-xl transition-all flex items-center gap-1 shadow-sm"
+            className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-xl transition-all flex items-center gap-1 shadow-sm"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Log</span>
@@ -151,7 +151,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search records..."
-            className="w-full sm:w-48 bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+            className="w-full sm:w-48 bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
           />
         </div>
       </div>
@@ -168,7 +168,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
                 <div className="flex items-center gap-2 text-[11px]">
                   <span className="font-bold text-slate-500 font-mono">{record.date}</span>
                   <span className="text-slate-300">·</span>
-                  <span className="font-bold text-[#F95A00] font-mono">{record.odometer.toLocaleString()} km</span>
+                  <span className="font-bold text-[#FF6B00] font-mono">{record.odometer.toLocaleString()} km</span>
                   {record.isCasaVerified && (
                     <>
                       <span className="text-slate-300">·</span>
@@ -240,7 +240,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
           <p className="text-xs text-slate-500">Log your maintenance visits to track costs and service history.</p>
           <button
             onClick={onOpenAddService}
-            className="px-4 py-2 text-xs font-bold text-white bg-[#F95A00] hover:bg-[#EA580C] rounded-xl shadow-sm"
+            className="px-4 py-2 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-xl shadow-sm"
           >
             Log Service
           </button>

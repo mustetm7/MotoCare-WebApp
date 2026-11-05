@@ -19,7 +19,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
         <button
           type="button"
           onClick={install}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-orange-50 border border-orange-200 text-[#F95A00] text-xs font-bold hover:bg-orange-100 transition-all shadow-sm shrink-0"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-orange-50 border border-orange-200 text-[#FF6B00] text-xs font-bold hover:bg-orange-100 transition-all shadow-sm shrink-0"
           title="Install MotoCare App on your device"
         >
           <Download className="w-3.5 h-3.5" />
@@ -38,7 +38,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-200 transition-all shadow-sm shrink-0"
             title="Install on iPhone / iPad"
           >
-            <Smartphone className="w-3.5 h-3.5 text-[#F95A00]" />
+            <Smartphone className="w-3.5 h-3.5 text-[#FF6B00]" />
             <span className="hidden sm:inline">Add to Home</span>
             <span className="sm:hidden">iOS App</span>
           </button>
@@ -77,7 +77,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
                   </div>
 
                   <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                    <div className="p-2 bg-orange-50 text-[#F95A00] rounded-xl shrink-0">
+                    <div className="p-2 bg-orange-50 text-[#FF6B00] rounded-xl shrink-0">
                       <PlusSquare className="w-5 h-5" />
                     </div>
                     <div>
@@ -104,7 +104,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
                 <button
                   type="button"
                   onClick={() => setShowIOSGuide(false)}
-                  className="w-full py-2.5 rounded-xl bg-[#F95A00] hover:bg-[#e05000] text-white text-xs font-bold transition-colors shadow-md shadow-orange-500/20"
+                  className="w-full py-2.5 rounded-xl bg-[#FF6B00] hover:bg-[#e05000] text-white text-xs font-bold transition-colors shadow-md shadow-orange-500/20"
                 >
                   Got It, Thanks!
                 </button>
@@ -126,7 +126,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
         <div className="min-w-0">
           <div className="font-bold text-slate-800 truncate flex items-center gap-1.5">
             Install MotoCare App
-            <span className="px-1.5 py-0.2 rounded bg-[#F95A00] text-white text-[9px] uppercase font-bold">PWA</span>
+            <span className="px-1.5 py-0.2 rounded bg-[#FF6B00] text-white text-[9px] uppercase font-bold">PWA</span>
           </div>
           <div className="text-[11px] text-slate-500 truncate">Fast offline access for Android & iOS riders</div>
         </div>
@@ -137,7 +137,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
           <button
             type="button"
             onClick={install}
-            className="px-3 py-1.5 rounded-xl bg-[#F95A00] hover:bg-[#e05000] text-white font-bold text-xs shadow-sm flex items-center gap-1 transition-all"
+            className="px-3 py-1.5 rounded-xl bg-[#FF6B00] hover:bg-[#e05000] text-white font-bold text-xs shadow-sm flex items-center gap-1 transition-all"
           >
             <Download className="w-3.5 h-3.5" />
             Install
@@ -146,7 +146,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
           <button
             type="button"
             onClick={() => setShowIOSGuide(true)}
-            className="px-3 py-1.5 rounded-xl bg-[#F95A00] hover:bg-[#e05000] text-white font-bold text-xs shadow-sm flex items-center gap-1 transition-all"
+            className="px-3 py-1.5 rounded-xl bg-[#FF6B00] hover:bg-[#e05000] text-white font-bold text-xs shadow-sm flex items-center gap-1 transition-all"
           >
             <Smartphone className="w-3.5 h-3.5" />
             Install
@@ -197,7 +197,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
               </div>
 
               <div className="flex items-start gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
-                <div className="p-2 bg-orange-50 text-[#F95A00] rounded-xl shrink-0">
+                <div className="p-2 bg-orange-50 text-[#FF6B00] rounded-xl shrink-0">
                   <PlusSquare className="w-5 h-5" />
                 </div>
                 <div>
@@ -212,7 +212,7 @@ export const PWAInstallButton: React.FC<{ variant?: 'header' | 'banner' | 'card'
             <button
               type="button"
               onClick={() => setShowIOSGuide(false)}
-              className="w-full py-2.5 rounded-xl bg-[#F95A00] hover:bg-[#e05000] text-white text-xs font-bold transition-colors"
+              className="w-full py-2.5 rounded-xl bg-[#FF6B00] hover:bg-[#e05000] text-white text-xs font-bold transition-colors"
             >
               Close
             </button>

@@ -4,8 +4,7 @@ import {
   ServiceRecord,
   PreRideItem,
   UserSubscription,
-  PaymentSubmission,
-  AppNotification,
+  UserAccount,
 } from '../types';
 import {
   INITIAL_MOTORCYCLES,
@@ -23,9 +22,7 @@ const STORAGE_KEYS = {
   PRE_RIDE: 'motocare_app_preride_v4',
   SUBSCRIPTION: 'motocare_app_subscription_v4',
   CUSTOM_PRESETS: 'motocare_app_quick_km_presets_v4',
-  PAYMENTS: 'motocare_app_payment_submissions_v4',
-  NOTIFICATIONS: 'motocare_app_notifications_v4',
-  AUTO_KM: 'motocare_app_auto_km_config_v4',
+  USER_ACCOUNTS: 'motocare_app_admin_users_v5',
 };
 
 // --- Storage Load / Save ---
@@ -172,6 +169,9 @@ export function resetAllToDefault() {
   localStorage.removeItem(STORAGE_KEYS.PRE_RIDE);
   localStorage.removeItem(STORAGE_KEYS.SUBSCRIPTION);
   localStorage.removeItem(STORAGE_KEYS.CUSTOM_PRESETS);
+  localStorage.removeItem('motocare_app_payment_submissions_v4');
+  localStorage.removeItem('motocare_app_notifications_v4');
+  localStorage.removeItem('motocare_app_auto_km_config_v4');
 }
 
 // --- Reminder Status Analysis ---
@@ -283,129 +283,111 @@ export function exportFullBackupJson(
   URL.revokeObjectURL(url);
 }
 
-// --- Payment Submissions for Admin Verification ---
+// --- Admin User Accounts Management ---
 
-export const INITIAL_PAYMENTS: PaymentSubmission[] = [
+export const INITIAL_USER_ACCOUNTS: UserAccount[] = [
   {
-    id: 'sub-sample-1',
+    id: 'user-001',
+    name: 'Musteta (You)',
+    email: 'mustetm7@gmail.com',
+    phone: '+63 917 554 9921',
+    registeredAt: '2026-10-12',
+    bikeModel: '2026 Yamaha NMAX 155',
+    bikeNickname: 'trocket',
+    bikePlate: 'ND 8492',
+    subscriptionTier: 'free',
+    paymentStatus: 'pending_approval',
+    paymentMethod: 'gcash',
+    referenceNumber: 'GCASH-881920',
+    amountPhp: 49,
+    lastPaymentDate: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+    notes: 'Submitted via official GCash QRPH. Awaiting manual Admin confirmation.',
+  },
+  {
+    id: 'user-002',
+    name: 'Mark Bautista',
+    email: 'mark.bautista@gmail.com',
+    phone: '+63 928 412 8839',
+    registeredAt: '2026-10-18',
+    bikeModel: '2025 Yamaha Aerox 155',
+    bikeNickname: 'Aerox Speed',
+    bikePlate: '123ABC',
+    subscriptionTier: 'free',
+    paymentStatus: 'pending_approval',
+    paymentMethod: 'gcash',
     referenceNumber: 'GCASH-982143',
     amountPhp: 49,
-    paymentMethod: 'gcash',
-    bikeNickname: 'Aerox Speed',
-    bikeModel: '2025 Yamaha Aerox 155',
-    userName: 'Mark Bautista',
-    userEmail: 'mark.bautista@example.ph',
-    submittedAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(), // 18 mins ago
-    status: 'pending',
-    notes: 'Paid via GCash QRPH. Reference code #GCASH-982143.',
+    lastPaymentDate: new Date(Date.now() - 1000 * 60 * 42).toISOString(),
+    notes: 'Paid via GCash QRPH. Sent receipt screenshot.',
   },
   {
-    id: 'sub-sample-2',
+    id: 'user-003',
+    name: 'Juan Dela Cruz',
+    email: 'juan.delacruz@gotyme.ph',
+    phone: '+63 995 211 4402',
+    registeredAt: '2026-09-04',
+    bikeModel: '2025 Honda Click 125i',
+    bikeNickname: 'Daily Clicker',
+    bikePlate: '8820NA',
+    subscriptionTier: 'pro',
+    paymentStatus: 'active_pro',
+    paymentMethod: 'gotyme',
     referenceNumber: 'GOTYME-449120',
     amountPhp: 49,
-    paymentMethod: 'gotyme',
-    bikeNickname: 'Daily Clicker',
-    bikeModel: '2025 Honda Click 125i',
-    userName: 'Juan Dela Cruz',
-    userEmail: 'juan.rider@example.ph',
-    submittedAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(), // 2 hours ago
-    status: 'approved',
-    approvedAt: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
-    reviewedBy: 'Admin (System)',
-    notes: 'Verified via GoTyme bank statement.',
+    lastPaymentDate: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString(),
+    approvedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString(),
+    approvedBy: 'Admin',
+    notes: 'GoTyme bank transfer verified.',
+  },
+  {
+    id: 'user-004',
+    name: 'Patricia Santos',
+    email: 'pat.santos@yahoo.com',
+    phone: '+63 919 778 3319',
+    registeredAt: '2026-10-24',
+    bikeModel: '2024 Honda PCX 160',
+    bikeNickname: 'Pearl PCX',
+    bikePlate: 'PCX 990',
+    subscriptionTier: 'free',
+    paymentStatus: 'unpaid_free',
+    notes: 'Using Free Tier (1 motorcycle).',
+  },
+  {
+    id: 'user-005',
+    name: 'Jerome Alcantara',
+    email: 'jerome.rider@gmail.com',
+    phone: '+63 916 443 1290',
+    registeredAt: '2026-08-15',
+    bikeModel: '2025 Kawasaki Dominar 400',
+    bikeNickname: 'Black Beast',
+    bikePlate: 'DOM 400',
+    subscriptionTier: 'pro',
+    paymentStatus: 'active_pro',
+    paymentMethod: 'gcash',
+    referenceNumber: 'GCASH-339102',
+    amountPhp: 49,
+    lastPaymentDate: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
+    approvedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
+    approvedBy: 'Admin',
+    notes: 'VIP Monthly Pro member.',
   },
 ];
 
-export function loadPaymentSubmissions(): PaymentSubmission[] {
+export function loadUserAccounts(): UserAccount[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.PAYMENTS);
+    const raw = localStorage.getItem(STORAGE_KEYS.USER_ACCOUNTS);
     if (raw) return JSON.parse(raw);
   } catch (err) {
-    console.error('Failed to load payment submissions', err);
+    console.error('Failed to load user accounts', err);
   }
-  return INITIAL_PAYMENTS;
+  return INITIAL_USER_ACCOUNTS;
 }
 
-export function savePaymentSubmissions(submissions: PaymentSubmission[]) {
+export function saveUserAccounts(users: UserAccount[]) {
   try {
-    localStorage.setItem(STORAGE_KEYS.PAYMENTS, JSON.stringify(submissions));
+    localStorage.setItem(STORAGE_KEYS.USER_ACCOUNTS, JSON.stringify(users));
   } catch (err) {
-    console.error('Failed to save payment submissions', err);
-  }
-}
-
-// --- Action Notifications ---
-
-export const INITIAL_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: 'notif-sample-1',
-    type: 'payment_pending',
-    title: 'Payment Verification Pending',
-    message: '1 payment of ₱49 is waiting for admin confirmation.',
-    timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    urgency: 'high',
-    isRead: false,
-    actionLabel: 'Review in Admin',
-    actionPayload: { tab: 'admin' },
-  },
-  {
-    id: 'notif-sample-2',
-    type: 'maintenance_due_soon',
-    title: 'Upcoming Service: Spark Plug',
-    message: 'Spark plug replacement interval is approaching in 500 km.',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(),
-    urgency: 'medium',
-    isRead: false,
-    actionLabel: 'View Schedule',
-    actionPayload: { tab: 'reminders' },
-  },
-];
-
-export function loadAppNotifications(): AppNotification[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS);
-    if (raw) return JSON.parse(raw);
-  } catch (err) {
-    console.error('Failed to load notifications', err);
-  }
-  return INITIAL_NOTIFICATIONS;
-}
-
-export function saveAppNotifications(notifications: AppNotification[]) {
-  try {
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
-  } catch (err) {
-    console.error('Failed to save notifications', err);
-  }
-}
-
-// --- Auto-Commute 5-min Odometer Inactivity Settings ---
-
-export interface AutoKmConfig {
-  enabled: boolean;
-  intervalMinutes: number; // default: 5
-  incrementKm: number; // default: 5
-}
-
-export function loadAutoKmConfig(): AutoKmConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.AUTO_KM);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // fallback
-  }
-  return {
-    enabled: true,
-    intervalMinutes: 5,
-    incrementKm: 5,
-  };
-}
-
-export function saveAutoKmConfig(config: AutoKmConfig) {
-  try {
-    localStorage.setItem(STORAGE_KEYS.AUTO_KM, JSON.stringify(config));
-  } catch {
-    // ignore
+    console.error('Failed to save user accounts', err);
   }
 }
 

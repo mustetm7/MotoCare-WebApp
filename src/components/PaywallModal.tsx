@@ -14,7 +14,12 @@ interface PaywallModalProps {
     referenceNumber?: string
   ) => void;
   onCancelSubscription: () => void;
-  onOpenAdmin?: () => void;
+  onSubmitPendingPayment?: (
+    paymentMethod: PaymentMethod,
+    referenceNumber: string
+  ) => void;
+  isPendingApproval?: boolean;
+  pendingReference?: string;
 }
 
 export const PaywallModal: React.FC<PaywallModalProps> = ({
@@ -23,7 +28,9 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
   subscription,
   onSubscribe,
   onCancelSubscription,
-  onOpenAdmin,
+  onSubmitPendingPayment,
+  isPendingApproval = false,
+  pendingReference,
 }) => {
   const [paymentMethod, setPaymentMethod] = useState<'gcash' | 'gotyme'>('gcash');
   const [referenceNumber, setReferenceNumber] = useState('');
@@ -31,6 +38,8 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
   const [copiedRef, setCopiedRef] = useState(false);
   const [qrSaved, setQrSaved] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [hasSubmittedPending, setHasSubmittedPending] = useState(false);
+  const [submittedRefCode, setSubmittedRefCode] = useState('');
   const [activeStep, setActiveStep] = useState<'details' | 'qr'>('details');
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
@@ -106,32 +115,22 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
     setTimeout(() => setCopiedRef(false), 2000);
   };
 
-  const handleConfirmPayment = () => {
+  const handleSubmitReference = () => {
     setIsProcessing(true);
     sounds.playClick();
 
+    const ref = referenceNumber.trim() || sampleRefCode;
+
     setTimeout(() => {
       setIsProcessing(false);
-      onSubscribe(
-        'monthly',
-        paymentMethod,
-        referenceNumber.trim() || sampleRefCode
-      );
-
-      try {
-        confetti({
-          particleCount: 90,
-          spread: 80,
-          origin: { y: 0.6 },
-          colors: ['#F95A00', '#00C5FF', '#10B981', '#EAB308'],
-        });
-      } catch {
-        // ignore
-      }
-
+      setHasSubmittedPending(true);
+      setSubmittedRefCode(ref);
       sounds.playSuccess();
-      onClose();
-    }, 1000);
+
+      if (onSubmitPendingPayment) {
+        onSubmitPendingPayment(paymentMethod, ref);
+      }
+    }, 700);
   };
 
   return (
@@ -158,61 +157,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
 
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
-          {subscription.status === 'pending_verification' ? (
-            <div className="space-y-4 text-center py-4 animate-in fade-in">
-              <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto shadow-md">
-                <Clock className="w-8 h-8 animate-pulse" />
-              </div>
-              <div>
-                <h3 className="text-xl font-extrabold text-slate-900">Payment Submitted for Verification</h3>
-                <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
-                  Your ₱49 payment has been submitted. Our Admin will verify your reference number and confirm your Pro access shortly.
-                </p>
-              </div>
-
-              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl text-xs space-y-2 text-left">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Verification Status:</span>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 font-extrabold text-amber-800 text-[10px] uppercase flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping inline-block" />
-                    Pending Admin Approval
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Payment Ref #:</span>
-                  <span className="font-mono font-bold text-slate-800">{subscription.referenceNumber || 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Payment Method:</span>
-                  <span className="font-bold text-slate-800 uppercase">{subscription.paymentMethod || 'GCash'} QRPH</span>
-                </div>
-              </div>
-
-              <div className="pt-2 space-y-2">
-                {onOpenAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      sounds.playClick();
-                      onClose();
-                      onOpenAdmin();
-                    }}
-                    className="w-full py-3 bg-slate-900 hover:bg-black text-amber-300 font-extrabold text-xs rounded-2xl transition-all shadow-md flex items-center justify-center gap-2"
-                  >
-                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span>Open Admin Portal to Confirm (Demo)</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-2xl transition-all"
-                >
-                  Return to Garage
-                </button>
-              </div>
-            </div>
-          ) : isPro ? (
+          {isPro ? (
             <div className="space-y-4 text-center py-4">
               <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-md">
                 <CheckCircle2 className="w-8 h-8" />
@@ -243,7 +188,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="w-full py-3 bg-[#F95A00] hover:bg-[#ea5300] text-white font-bold text-xs rounded-2xl transition-all shadow-md shadow-orange-500/20"
+                  className="w-full py-3 bg-[#FF6B00] hover:bg-[#ea5300] text-white font-bold text-xs rounded-2xl transition-all shadow-md shadow-orange-500/20"
                 >
                   Return to Garage
                 </button>
@@ -360,9 +305,9 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
 
               {/* Monthly Pricing Card (Annual Removed) */}
               <div className="pt-1">
-                <div className="p-4 rounded-2xl border-2 border-[#F95A00] bg-orange-50/40 shadow-sm relative flex items-center justify-between">
+                <div className="p-4 rounded-2xl border-2 border-[#FF6B00] bg-orange-50/40 shadow-sm relative flex items-center justify-between">
                   <div>
-                    <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#F95A00] text-white text-[10px] font-bold uppercase tracking-wider mb-1.5">
+                    <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#FF6B00] text-white text-[10px] font-bold uppercase tracking-wider mb-1.5">
                       Cancel Anytime
                     </span>
                     <div className="text-xs font-bold text-slate-600">Monthly Pro Subscription</div>
@@ -440,7 +385,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                     sounds.playClick();
                     setActiveStep('qr');
                   }}
-                  className="w-full py-3.5 bg-[#F95A00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#F95A00]/25 transition-all active:scale-98 flex items-center justify-center gap-2"
+                  className="w-full py-3.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#FF6B00]/25 transition-all active:scale-98 flex items-center justify-center gap-2"
                 >
                   <QrCode className="w-4 h-4" />
                   <span>Pay {planLabel} via {currentProvider.name} QR</span>
@@ -631,36 +576,89 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                     value={referenceNumber}
                     onChange={(e) => setReferenceNumber(e.target.value)}
                     placeholder={`e.g. 104829482 or ${currentProvider.name} Ref`}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
                   />
                 </div>
               </div>
 
-              {/* Unlock Button */}
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  disabled={isProcessing}
-                  onClick={handleConfirmPayment}
-                  className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold text-sm shadow-lg shadow-emerald-600/25 transition-all active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isProcessing ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Verifying {currentProvider.name} Payment...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4 text-amber-200" />
-                      <span>I Have Paid ₱49 — Submit for Admin Approval</span>
-                    </>
-                  )}
-                </button>
+              {/* Admin Verification Submission Section */}
+              {hasSubmittedPending || isPendingApproval ? (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-left space-y-3 animate-in fade-in">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-amber-200/80 text-amber-800 flex items-center justify-center shrink-0">
+                      <Clock className="w-4 h-4 animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-amber-900">Payment Submitted for Admin Review</div>
+                      <div className="text-[10px] text-amber-700 font-semibold">Status: Pending Verification</div>
+                    </div>
+                  </div>
 
-                <p className="text-[10px] text-center text-slate-400">
-                  Submits reference to the Admin verification queue. Your Pro access will activate automatically upon confirmation.
-                </p>
-              </div>
+                  <div className="p-2.5 bg-white/90 rounded-xl border border-amber-200/80 text-xs space-y-1">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-500">Transaction Reference:</span>
+                      <span className="font-mono font-bold text-slate-800">
+                        {submittedRefCode || pendingReference || referenceNumber || sampleRefCode}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-500">Amount:</span>
+                      <span className="font-bold text-emerald-700">₱49.00</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-slate-500">Payment Method:</span>
+                      <span className="font-bold text-slate-800 uppercase">{paymentMethod}</span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Thank you! Your reference number has been forwarded to the <strong>Admin Portal</strong>. Once the admin confirms your payment, your Pro VIP access will be unlocked.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs transition-all active:scale-95 shadow-sm"
+                  >
+                    Return to Garage
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={handleSubmitReference}
+                    className="w-full py-3.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#FF6B00]/25 transition-all active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Submitting Reference to Admin...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Clock className="w-4 h-4 text-orange-200" />
+                        <span>Submit Reference for Admin Verification</span>
+                      </>
+                    )}
+                  </button>
+
+                  <p className="text-[10px] text-center text-slate-400">
+                    Payments are manually verified by the administrator in the Admin Portal before Pro is unlocked.
+                  </p>
+
+                  <div className="pt-0.5 flex items-center justify-center">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="text-xs text-slate-400 hover:text-slate-600 transition-colors font-medium"
+                    >
+                      I&apos;ll pay later (Close)
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

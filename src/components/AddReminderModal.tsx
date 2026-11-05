@@ -177,7 +177,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
       <div className="bg-white border border-slate-100 rounded-3xl w-full max-w-lg my-6 overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
           <div className="flex items-center gap-2">
-            <Bell className="w-5 h-5 text-[#F95A00]" />
+            <Bell className="w-5 h-5 text-[#FF6B00]" />
             <h3 className="text-base font-extrabold text-slate-900">
               {editingReminder ? 'Edit PMS Task' : 'Add Maintenance Task'}
             </h3>
@@ -194,7 +194,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
         {!editingReminder && (
           <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-100 shrink-0">
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1 mb-1.5">
-              <Sparkles className="w-3 h-3 text-[#F95A00]" /> Philippine Manual Presets:
+              <Sparkles className="w-3 h-3 text-[#FF6B00]" /> Philippine Manual Presets:
             </div>
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 text-xs">
               {PRESETS.map((p, idx) => (
@@ -222,7 +222,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
               placeholder="e.g. Engine Oil Change (Yamalube AT Blue Core)"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
           </div>
 
@@ -248,7 +248,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
                       : 'BRAKES'
                   );
                 }}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               >
                 <option value="Engine Oil">Engine Oil</option>
                 <option value="Gear Oil">Gear Oil</option>
@@ -273,7 +273,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
                 required
                 value={intervalKm}
                 onChange={(e) => setIntervalKm(e.target.value === '' ? '' : Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
           </div>
@@ -288,7 +288,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
                 min="0"
                 value={lastCompletedOdo}
                 onChange={(e) => setLastCompletedOdo(e.target.value === '' ? '' : Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
 
@@ -302,7 +302,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
                 step="10"
                 value={estimatedCostPhp}
                 onChange={(e) => setEstimatedCostPhp(e.target.value === '' ? '' : Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#F95A00]"
+                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               />
             </div>
           </div>
@@ -316,7 +316,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
               placeholder="e.g. [YMPH Manual - NMAX 155] Yamalube 4T 10W-40 AT JASO MB every 3,000 km..."
               value={manualSpecNote}
               onChange={(e) => setManualSpecNote(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-[#F95A00]"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
             />
           </div>
 
@@ -369,7 +369,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="px-5 py-2.5 text-xs font-bold text-white bg-[#F95A00] hover:bg-[#EA580C] rounded-2xl transition-all shadow-md shadow-[#F95A00]/25"
+                className="px-5 py-2.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-2xl transition-all shadow-md shadow-[#FF6B00]/25"
               >
                 {editingReminder ? 'Update Task' : 'Save Task'}
               </button>

@@ -38,7 +38,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
         {/* Title & Subtitle */}
         <div className="space-y-1">
           <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
-            Moto<span className="text-[#F95A00]">Care</span>
+            Moto<span className="text-[#FF6B00]">Care</span>
           </h1>
           <div className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">
             MAINTENANCE • REMINDERS • MORE
@@ -52,7 +52,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
         <div className="text-left space-y-4 pt-2">
           {/* Feature 1 */}
           <div className="flex items-start gap-3.5">
-            <div className="p-2 rounded-xl bg-orange-50 text-[#F95A00] shrink-0 mt-0.5">
+            <div className="p-2 rounded-xl bg-orange-50 text-[#FF6B00] shrink-0 mt-0.5">
               <Bike className="w-5 h-5" />
             </div>
             <div>
@@ -65,7 +65,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
 
           {/* Feature 2 */}
           <div className="flex items-start gap-3.5">
-            <div className="p-2 rounded-xl bg-orange-50 text-[#F95A00] shrink-0 mt-0.5">
+            <div className="p-2 rounded-xl bg-orange-50 text-[#FF6B00] shrink-0 mt-0.5">
               <Wrench className="w-5 h-5" />
             </div>
             <div>
@@ -78,7 +78,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
 
           {/* Feature 3 */}
           <div className="flex items-start gap-3.5">
-            <div className="p-2 rounded-xl bg-orange-50 text-[#F95A00] shrink-0 mt-0.5">
+            <div className="p-2 rounded-xl bg-orange-50 text-[#FF6B00] shrink-0 mt-0.5">
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
@@ -103,7 +103,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
               sounds.playClick();
               onAddMotorcycle();
             }}
-            className="w-full py-3.5 bg-[#F95A00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#F95A00]/25 transition-all flex items-center justify-center gap-1.5 active:scale-98"
+            className="w-full py-3.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#FF6B00]/25 transition-all flex items-center justify-center gap-1.5 active:scale-98"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             <span>Add Your Motorcycle</span>

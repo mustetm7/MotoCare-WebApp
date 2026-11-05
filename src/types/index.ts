@@ -109,66 +109,42 @@ export interface PreRideItem {
   checked: boolean;
 }
 
-export type ActiveTab = 'garage' | 'reminders' | 'logbook' | 'gps-ride' | 'lto' | 'analytics' | 'admin';
+export type ActiveTab = 'garage' | 'reminders' | 'logbook' | 'gps-ride' | 'lto' | 'analytics';
 
 export type UserSubscriptionTier = 'free' | 'pro';
 export type PaymentMethod = 'gcash' | 'gotyme' | 'maribank' | 'maya' | 'card';
-export type PaymentStatus = 'pending' | 'approved' | 'rejected';
-
-export interface PaymentSubmission {
-  id: string;
-  referenceNumber: string;
-  amountPhp: number;
-  paymentMethod: PaymentMethod;
-  bikeNickname?: string;
-  bikeModel?: string;
-  userEmail?: string;
-  userName?: string;
-  submittedAt: string;
-  status: PaymentStatus;
-  approvedAt?: string;
-  reviewedBy?: string;
-  notes?: string;
-}
-
-export type NotificationActionType =
-  | 'maintenance_overdue'
-  | 'maintenance_due_soon'
-  | 'auto_km_added'
-  | 'payment_pending'
-  | 'payment_approved'
-  | 'payment_rejected'
-  | 'lto_renewal_due';
-
-export interface AppNotification {
-  id: string;
-  type: NotificationActionType;
-  title: string;
-  message: string;
-  timestamp: string;
-  urgency: 'critical' | 'high' | 'medium' | 'info';
-  isRead: boolean;
-  actionLabel?: string;
-  actionPayload?: {
-    tab?: ActiveTab;
-    reminderId?: string;
-    bikeId?: string;
-    addedKm?: number;
-    newOdo?: number;
-    referenceNumber?: string;
-  };
-}
 
 export interface UserSubscription {
   tier: UserSubscriptionTier;
   plan: 'monthly' | 'annual' | null;
-  status: 'active' | 'trial' | 'free' | 'pending_verification';
+  status: 'active' | 'trial' | 'free';
   trialEndDate?: string;
   paymentMethod?: PaymentMethod;
   gcashNumber?: string;
   referenceNumber?: string;
-  submissionId?: string;
   expiryDate?: string;
+}
+
+export type AccountPaymentStatus = 'pending_approval' | 'active_pro' | 'unpaid_free' | 'rejected';
+
+export interface UserAccount {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  registeredAt: string;
+  bikeModel: string;
+  bikeNickname?: string;
+  bikePlate?: string;
+  subscriptionTier: UserSubscriptionTier;
+  paymentStatus: AccountPaymentStatus;
+  paymentMethod?: PaymentMethod;
+  referenceNumber?: string;
+  amountPhp?: number;
+  lastPaymentDate?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  notes?: string;
 }
 
 export interface ActiveGpsRide {

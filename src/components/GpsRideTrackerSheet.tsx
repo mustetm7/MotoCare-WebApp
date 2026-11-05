@@ -134,7 +134,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
 
       {/* Tracking bike label */}
       <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-        <Bike className="w-4 h-4 text-[#F95A00]" />
+        <Bike className="w-4 h-4 text-[#FF6B00]" />
         <span>Tracking for: {bike.year} {bike.brand} {bike.model}</span>
       </div>
 
@@ -146,7 +146,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         <div className="text-7xl font-extrabold text-slate-900 tracking-tight font-mono leading-none">
           {currentSpeed}
         </div>
-        <div className="text-sm font-bold text-[#F95A00]">
+        <div className="text-sm font-bold text-[#FF6B00]">
           km/h
         </div>
       </div>
@@ -155,7 +155,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
       <div className="grid grid-cols-3 gap-2 text-center py-2 border-y border-slate-100">
         <div>
           <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">DISTANCE</div>
-          <div className="text-base font-extrabold text-[#F95A00] font-mono mt-0.5">
+          <div className="text-base font-extrabold text-[#FF6B00] font-mono mt-0.5">
             +{distanceKm.toFixed(2)} km
           </div>
         </div>
@@ -190,7 +190,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
             onChange={(e) => setIsSimulating(e.target.checked)}
             className="sr-only peer"
           />
-          <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#F95A00] relative"></div>
+          <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF6B00] relative"></div>
         </label>
       </div>
 
@@ -207,7 +207,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
           </div>
         </div>
 
-        <span className="px-3 py-1 rounded-xl bg-[#F95A00] text-white text-xs font-black font-mono shadow-sm">
+        <span className="px-3 py-1 rounded-xl bg-[#FF6B00] text-white text-xs font-black font-mono shadow-sm">
           +{roundedAddedKm} km
         </span>
       </div>
@@ -229,7 +229,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         <button
           type="button"
           onClick={handleFinish}
-          className="col-span-8 py-3 px-4 bg-[#F95A00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-[#F95A00]/25 transition-all active:scale-98"
+          className="col-span-8 py-3 px-4 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-[#FF6B00]/25 transition-all active:scale-98"
         >
           <span>Finish & Add to Odometer</span>
         </button>
