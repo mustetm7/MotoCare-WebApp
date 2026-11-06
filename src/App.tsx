@@ -52,14 +52,17 @@ import { PaywallModal } from './components/PaywallModal';
 import { Plus } from 'lucide-react';
 import { generateOemSchedule, PhilippineModelPreset } from './data/philippinePresets';
 import { INITIAL_MOTORCYCLES, INITIAL_REMINDERS } from './data/initialData';
+import { useAuth } from './context/AuthContext';
+import { saveMotorcycleToFirestore } from './utils/firestoreService';
 
 export default function App() {
+  const { user, subscription, setSubscription, submitPaymentRef } = useAuth();
+
   // --- Persistent State ---
   const [motorcycles, setMotorcycles] = React.useState<Motorcycle[]>(() => loadMotorcycles());
   const [activeBikeId, setActiveBikeId] = React.useState<string>(() => loadActiveBikeId(motorcycles));
   const [reminders, setReminders] = React.useState<MaintenanceReminder[]>(() => loadReminders());
   const [serviceRecords, setServiceRecords] = React.useState<ServiceRecord[]>(() => loadServiceRecords());
-  const [subscription, setSubscription] = React.useState<UserSubscription>(() => loadSubscription());
   const [quickPresets, setQuickPresets] = React.useState<number[]>(() => loadQuickKmPresets());
 
   // User Accounts State (persisted for Admin Review)
@@ -378,14 +381,28 @@ export default function App() {
   const isAlreadyPending = currentRider?.paymentStatus === 'pending_approval';
   const existingPendingRef = currentRider?.referenceNumber;
 
-  const handleSubmitReference = (
+  const handleSubmitReference = async (
     paymentMethod: PaymentMethod,
     referenceNumber: string
   ) => {
     const refCode = referenceNumber.trim() || `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    // 1. Submit to Firebase Firestore
+    try {
+      await submitPaymentRef(
+        paymentMethod,
+        refCode,
+        activeBike?.model || 'Motorcycle',
+        activeBike?.licensePlate || ''
+      );
+    } catch (err) {
+      console.warn('Could not submit payment to Firestore:', err);
+    }
+
+    // 2. Update local state
     setUserAccounts((prev) =>
       prev.map((u) =>
-        u.id === 'user-001' || u.email === 'mustetm7@gmail.com'
+        u.id === 'user-001' || u.email === (user?.email || 'mustetm7@gmail.com')
           ? {
               ...u,
               subscriptionTier: 'free', // stays free until owner approves in /admin
@@ -474,8 +491,7 @@ export default function App() {
         }}
         onOpenPaywall={() => setIsPaywallOpen(true)}
         onGoToHome={() => {
-          setMotorcycles([]);
-          setActiveBikeId('');
+          setActiveTab('garage');
         }}
         overdueCount={overdueCount}
         overdueReminders={overdueReminders}

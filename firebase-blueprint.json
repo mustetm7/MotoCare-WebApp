@@ -1,0 +1,162 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account and profile document.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The unique user ID matching auth.uid." },
+        "email": { "type": "string", "description": "The user's email address." },
+        "displayName": { "type": "string", "description": "The user's display name." },
+        "photoURL": { "type": "string", "description": "Avatar image URL." },
+        "phone": { "type": "string", "description": "Contact phone number." },
+        "role": { "type": "string", "description": "Account role: rider or admin.", "enum": ["rider", "admin"] },
+        "subscriptionTier": { "type": "string", "description": "free or pro", "enum": ["free", "pro"] },
+        "subscriptionStatus": { "type": "string", "description": "active, trial, or free", "enum": ["active", "trial", "free"] },
+        "paymentStatus": { "type": "string", "description": "Payment verification status.", "enum": ["pending_approval", "active_pro", "unpaid_free", "rejected"] },
+        "paymentMethod": { "type": "string", "description": "Payment channel used (e.g., gcash, gotyme)." },
+        "referenceNumber": { "type": "string", "description": "Latest submitted reference code." },
+        "amountPhp": { "type": "number", "description": "Amount paid in PHP." },
+        "lastPaymentDate": { "type": "string", "description": "ISO timestamp of last payment." },
+        "approvedAt": { "type": "string", "description": "ISO timestamp of admin approval." },
+        "approvedBy": { "type": "string", "description": "Admin identifier who approved PRO access." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Last update timestamp." }
+      },
+      "required": ["id", "email", "role", "subscriptionTier"]
+    },
+    "Motorcycle": {
+      "title": "Motorcycle",
+      "description": "Motorcycle in user's digital garage.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique motorcycle ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "nickname": { "type": "string", "description": "Custom motorcycle nickname." },
+        "brand": { "type": "string", "description": "Brand (Yamaha, Honda, Suzuki, Kawasaki, etc.)." },
+        "model": { "type": "string", "description": "Model name (NMAX 155, Click 125i, etc.)." },
+        "year": { "type": "number", "description": "Manufacturing year." },
+        "licensePlate": { "type": "string", "description": "License plate or MV file number." },
+        "odometer": { "type": "number", "description": "Current mileage in kilometers." },
+        "unit": { "type": "string", "description": "Distance unit (km or mi)." },
+        "motorcycleType": { "type": "string", "description": "Type of motorcycle (Scooter / AT, Underbone, etc.)." },
+        "customColorBadge": { "type": "string", "description": "Hex color code for garage avatar." },
+        "specs": { "type": "object", "description": "Technical motorcycle specifications." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Last update timestamp." }
+      },
+      "required": ["id", "userId", "brand", "model", "year", "odometer"]
+    },
+    "MaintenanceReminder": {
+      "title": "MaintenanceReminder",
+      "description": "Recurring maintenance reminder task.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique reminder ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "bikeId": { "type": "string", "description": "Target motorcycle ID." },
+        "title": { "type": "string", "description": "Task title (e.g., Engine Oil Change)." },
+        "category": { "type": "string", "description": "Service category." },
+        "categoryTag": { "type": "string", "description": "Short category tag." },
+        "intervalKm": { "type": "number", "description": "Recurring interval in km." },
+        "lastCompletedOdo": { "type": "number", "description": "Odometer at last completion." },
+        "nextDueOdo": { "type": "number", "description": "Odometer when next service is due." },
+        "lastCompletedDate": { "type": "string", "description": "Date of last service." },
+        "priority": { "type": "string", "description": "high, medium, or low" },
+        "notes": { "type": "string", "description": "Mechanic or owner notes." },
+        "manualSpecNote": { "type": "string", "description": "OEM manual spec reference." },
+        "estimatedCostPhp": { "type": "number", "description": "Estimated cost in PHP." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Last update timestamp." }
+      },
+      "required": ["id", "userId", "bikeId", "title", "intervalKm", "nextDueOdo"]
+    },
+    "ServiceRecord": {
+      "title": "ServiceRecord",
+      "description": "Logged maintenance history record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique service record ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "bikeId": { "type": "string", "description": "Serviced motorcycle ID." },
+        "date": { "type": "string", "description": "Service date." },
+        "odometer": { "type": "number", "description": "Mileage at time of service." },
+        "title": { "type": "string", "description": "Service task title." },
+        "category": { "type": "string", "description": "Service category." },
+        "type": { "type": "string", "description": "DIY, Casa / Official 3S, or Independent Shop." },
+        "shopName": { "type": "string", "description": "Workshop or service center name." },
+        "oilBrandGrade": { "type": "string", "description": "Engine or gear oil brand and viscosity." },
+        "parts": { "type": "array", "description": "List of replaced parts and itemized costs." },
+        "laborCostPhp": { "type": "number", "description": "Labor fee in PHP." },
+        "totalCostPhp": { "type": "number", "description": "Total invoiced cost in PHP." },
+        "notes": { "type": "string", "description": "Mechanic notes." },
+        "receiptNumber": { "type": "string", "description": "Official receipt number." },
+        "isCasaVerified": { "type": "boolean", "description": "Whether service has Casa stamp." },
+        "linkedReminderId": { "type": "string", "description": "ID of reminder reset by this service." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Last update timestamp." }
+      },
+      "required": ["id", "userId", "bikeId", "date", "odometer", "title", "totalCostPhp"]
+    },
+    "PaymentSubmission": {
+      "title": "PaymentSubmission",
+      "description": "Submitted payment transaction reference for admin verification.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique submission ID." },
+        "userId": { "type": "string", "description": "Rider user ID." },
+        "userEmail": { "type": "string", "description": "Rider email." },
+        "userName": { "type": "string", "description": "Rider full name." },
+        "userPhone": { "type": "string", "description": "Rider phone number." },
+        "bikeModel": { "type": "string", "description": "Rider's motorcycle model." },
+        "bikePlate": { "type": "string", "description": "Motorcycle license plate." },
+        "paymentMethod": { "type": "string", "description": "gcash, gotyme, etc." },
+        "referenceNumber": { "type": "string", "description": "Payment reference code." },
+        "amountPhp": { "type": "number", "description": "Amount paid (49)." },
+        "status": { "type": "string", "description": "pending_approval, active_pro, or rejected", "enum": ["pending_approval", "active_pro", "rejected"] },
+        "submittedAt": { "type": "string", "description": "Timestamp when submitted." },
+        "reviewedAt": { "type": "string", "description": "Timestamp when reviewed." },
+        "reviewedBy": { "type": "string", "description": "Admin who reviewed." },
+        "notes": { "type": "string", "description": "Review or rider notes." }
+      },
+      "required": ["id", "userId", "userEmail", "paymentMethod", "referenceNumber", "status"]
+    },
+    "AdminDoc": {
+      "title": "AdminDoc",
+      "description": "Document marking user as system administrator.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "description": "Admin email address." },
+        "role": { "type": "string", "description": "Admin role description." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." }
+      },
+      "required": ["email", "role"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "User profile and subscription metadata."
+    },
+    "/motorcycles/{bikeId}": {
+      "schema": { "$ref": "Motorcycle" },
+      "description": "Motorcycles belonging to users."
+    },
+    "/reminders/{reminderId}": {
+      "schema": { "$ref": "MaintenanceReminder" },
+      "description": "Maintenance reminders for motorcycles."
+    },
+    "/serviceRecords/{recordId}": {
+      "schema": { "$ref": "ServiceRecord" },
+      "description": "Service logbook history entries."
+    },
+    "/paymentSubmissions/{submissionId}": {
+      "schema": { "$ref": "PaymentSubmission" },
+      "description": "Submitted payment references for admin approval."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "AdminDoc" },
+      "description": "Verified system administrators."
+    }
+  }
+}
