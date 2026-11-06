@@ -62,15 +62,24 @@ export default function App() {
   const [subscription, setSubscription] = React.useState<UserSubscription>(() => loadSubscription());
   const [quickPresets, setQuickPresets] = React.useState<number[]>(() => loadQuickKmPresets());
 
-  // Admin User Accounts & Standalone Portal URL state
+  // User Accounts State (persisted for Admin Review)
   const [userAccounts, setUserAccounts] = React.useState<UserAccount[]>(() => loadUserAccounts());
-  const [isAdminPortal, setIsAdminPortal] = React.useState<boolean>(() => {
+
+  // Separate Admin Page URL detection (/admin or #admin)
+  const checkIsAdminPage = () => {
     if (typeof window === 'undefined') return false;
+    const path = window.location.pathname.toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    const query = new URLSearchParams(window.location.search).get('admin');
     return (
-      window.location.hash === '#admin' ||
-      new URLSearchParams(window.location.search).get('admin') === 'true'
+      path === '/admin' ||
+      path.startsWith('/admin/') ||
+      hash === '#admin' ||
+      query === 'true'
     );
-  });
+  };
+
+  const [isAdminPortal, setIsAdminPortal] = React.useState<boolean>(() => checkIsAdminPage());
 
   // Active Tab
   const [activeTab, setActiveTab] = React.useState<ActiveTab>('garage');
@@ -92,12 +101,10 @@ export default function App() {
   const [isOverdueBannerDismissed, setIsOverdueBannerDismissed] = React.useState(false);
   const alertedOverdueIds = React.useRef<Set<string>>(new Set());
 
-  // Listen to hash and URL query changes (for direct #admin link)
+  // Listen to path, hash and popstate changes (for direct /admin URL)
   React.useEffect(() => {
     const handleUrlChange = () => {
-      const isHash = window.location.hash === '#admin';
-      const isQuery = new URLSearchParams(window.location.search).get('admin') === 'true';
-      setIsAdminPortal(isHash || isQuery);
+      setIsAdminPortal(checkIsAdminPage());
     };
 
     window.addEventListener('hashchange', handleUrlChange);
@@ -254,16 +261,10 @@ export default function App() {
     setServiceRecords(serviceRecords.filter((r) => r.id !== recordId));
   };
 
-  const handleOpenAdminPortal = () => {
-    sounds.playClick();
-    window.location.hash = 'admin';
-    setIsAdminPortal(true);
-  };
-
   const handleCloseAdminPortal = () => {
     sounds.playClick();
-    if (window.location.hash === '#admin') {
-      window.history.pushState(null, '', window.location.pathname);
+    if (typeof window !== 'undefined') {
+      window.history.pushState(null, '', '/');
     }
     setIsAdminPortal(false);
   };
@@ -374,10 +375,10 @@ export default function App() {
   const currentRider = userAccounts.find(
     (u) => u.id === 'user-001' || u.email === 'mustetm7@gmail.com'
   );
-  const isPendingApproval = currentRider?.paymentStatus === 'pending_approval';
-  const pendingReference = currentRider?.referenceNumber;
+  const isAlreadyPending = currentRider?.paymentStatus === 'pending_approval';
+  const existingPendingRef = currentRider?.referenceNumber;
 
-  const handleSubmitPendingPayment = (
+  const handleSubmitReference = (
     paymentMethod: PaymentMethod,
     referenceNumber: string
   ) => {
@@ -387,13 +388,13 @@ export default function App() {
         u.id === 'user-001' || u.email === 'mustetm7@gmail.com'
           ? {
               ...u,
-              subscriptionTier: 'free',
+              subscriptionTier: 'free', // stays free until owner approves in /admin
               paymentStatus: 'pending_approval',
               paymentMethod,
               referenceNumber: refCode,
               amountPhp: 49,
               lastPaymentDate: new Date().toISOString(),
-              notes: 'Submitted via Paywall. Awaiting Admin manual approval.',
+              notes: 'Submitted via Payment Gateway. Awaiting Admin manual approval.',
             }
           : u
       )
@@ -627,23 +628,9 @@ export default function App() {
           </>
         )}
 
-        {/* Discreet Admin Portal Link for direct access */}
-        <footer className="pt-8 pb-4 text-center text-xs text-slate-400">
-          <div className="flex flex-col items-center justify-center gap-1.5">
-            <button
-              type="button"
-              onClick={handleOpenAdminPortal}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 font-medium transition-all text-[11px] border border-slate-200/80 shadow-xs cursor-pointer active:scale-95"
-              title="Open Admin Dashboard to verify GCash/GoTyme QR payments and manually approve PRO"
-            >
-              <span className="text-xs">🔒</span>
-              <span>Admin Portal</span>
-              <span className="text-[10px] text-slate-400 bg-white px-1.5 py-0.5 rounded font-mono border border-slate-200">#admin</span>
-            </button>
-            <p className="text-[10px] text-slate-400">
-              MotoCare PH • Separate link: <a href="#admin" onClick={handleOpenAdminPortal} className="font-mono text-slate-500 hover:underline">/#admin</a>
-            </p>
-          </div>
+        {/* User-Facing Clean Footer (Zero admin links) */}
+        <footer className="pt-8 pb-4 text-center text-[10px] text-slate-400">
+          <p>MotoCare PH • Motorcycle Maintenance & Digital Garage</p>
         </footer>
       </main>
 
@@ -695,11 +682,10 @@ export default function App() {
         isOpen={isPaywallOpen}
         onClose={() => setIsPaywallOpen(false)}
         subscription={subscription}
-        onSubscribe={handleSubscribe}
+        onSubmitReference={handleSubmitReference}
         onCancelSubscription={handleCancelSubscription}
-        onSubmitPendingPayment={handleSubmitPendingPayment}
-        isPendingApproval={isPendingApproval}
-        pendingReference={pendingReference}
+        isAlreadyPending={isAlreadyPending}
+        existingPendingRef={existingPendingRef}
       />
 
       {/* GPS Ride Tracker Modal */}
