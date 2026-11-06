@@ -38,12 +38,21 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
   isAlreadyPending = false,
   existingPendingRef,
 }) => {
-  const [activeStep, setActiveStep] = useState<'details' | 'qr'>('details');
+  // Always default to 'qr' so dynamic QR codes and Instant Mobile Tools are front-and-center
+  const [activeTab, setActiveTab] = useState<'qr' | 'details' | 'status'>('qr');
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const isPro = subscription.tier === 'pro';
   const planAmount = 49;
-  const planLabel = '₱49 / month';
+
+  // Sync tab if user is pro and activeTab was status
+  React.useEffect(() => {
+    if (isOpen) {
+      // If user is already pro, let them either see status or jump right to QR gateway if desired
+      // Default to 'qr' so they can inspect the QR code and mobile tools as requested!
+      setActiveTab('qr');
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -56,7 +65,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
             <img src="/logo.png" alt="MotoCare Logo" className="w-6 h-6 rounded-lg object-contain" />
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-700 font-bold text-xs">
               <span className="text-amber-500">★</span>
-              <span className="tracking-wide">MOTOCARE PRO</span>
+              <span className="tracking-wide">MOTOCARE PRO GATEWAY</span>
             </div>
           </div>
 
@@ -69,10 +78,80 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
           </button>
         </div>
 
+        {/* Top Segmented Tabs Navigation */}
+        <div className="px-5 pt-3 pb-2 border-b border-slate-100 bg-slate-50/70 shrink-0">
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-200/70 rounded-2xl">
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playClick();
+                setActiveTab('qr');
+              }}
+              className={`py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                activeTab === 'qr'
+                  ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5 text-[#FF6B00]" />
+              <span>⚡ QR Payment (₱49)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playClick();
+                setActiveTab(isPro ? 'status' : 'details');
+              }}
+              className={`py-2 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                activeTab === 'details' || activeTab === 'status'
+                  ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span>{isPro ? '★ Pro Status' : '★ Pro Benefits'}</span>
+            </button>
+          </div>
+        </div>
+
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
-          {isPro ? (
-            <div className="space-y-4 text-center py-4">
+          {/* TAB 1: FRONT-AND-CENTER PAYMENT GATEWAY (GCash & GoTyme QR + Instant Mobile Tools) */}
+          {activeTab === 'qr' && (
+            <div className="space-y-4 animate-in fade-in duration-150">
+              {isPro && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between text-xs text-emerald-800">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="font-bold">Your Pro Membership is already Active!</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('status')}
+                    className="text-[11px] font-black underline text-emerald-700 hover:text-emerald-900"
+                  >
+                    View Status
+                  </button>
+                </div>
+              )}
+
+              {/* Dedicated Payment Gateway Component */}
+              <PaymentGateway
+                planAmount={planAmount}
+                onSubmitReference={(method, ref) => {
+                  onSubmitReference(method, ref);
+                }}
+                onClose={onClose}
+                isAlreadyPending={isAlreadyPending}
+                existingPendingRef={existingPendingRef}
+              />
+            </div>
+          )}
+
+          {/* TAB 2: PRO STATUS (If user already has Pro active) */}
+          {activeTab === 'status' && isPro && (
+            <div className="space-y-4 text-center py-2 animate-in fade-in duration-150">
               <div className="w-16 h-16 rounded-3xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-md">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
@@ -101,8 +180,20 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
               <div className="pt-2 space-y-2">
                 <button
                   type="button"
+                  onClick={() => {
+                    sounds.playClick();
+                    setActiveTab('qr');
+                  }}
+                  className="w-full py-3 bg-slate-900 hover:bg-black text-white font-bold text-xs rounded-2xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <QrCode className="w-4 h-4 text-[#FF6B00]" />
+                  <span>View QR Payment Gateway & Channels</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={onClose}
-                  className="w-full py-3 bg-[#FF6B00] hover:bg-[#ea5300] text-white font-bold text-xs rounded-2xl transition-all shadow-md shadow-orange-500/20 cursor-pointer"
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-2xl transition-all cursor-pointer"
                 >
                   Return to Garage
                 </button>
@@ -142,8 +233,11 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 )}
               </div>
             </div>
-          ) : activeStep === 'details' ? (
-            <>
+          )}
+
+          {/* TAB 3: MARKETING / PRO BENEFITS LIST */}
+          {activeTab === 'details' && !isPro && (
+            <div className="space-y-4 animate-in fade-in duration-150">
               {/* Headline */}
               <div>
                 <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight leading-tight">
@@ -245,12 +339,12 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                   type="button"
                   onClick={() => {
                     sounds.playClick();
-                    setActiveStep('qr');
+                    setActiveTab('qr');
                   }}
                   className="w-full py-3.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl font-bold text-sm shadow-lg shadow-[#FF6B00]/25 transition-all active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <QrCode className="w-4 h-4" />
-                  <span>Proceed to QR Payment (₱49)</span>
+                  <span>Scan GCash & GoTyme QR (₱49)</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
 
@@ -258,32 +352,6 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                   Scan and submit your transaction reference for owner admin verification.
                 </p>
               </div>
-            </>
-          ) : (
-            /* Step 2: Dedicated Payment Gateway Component */
-            <div className="space-y-4 animate-in fade-in zoom-in-95 duration-150">
-              {/* Back to plans button */}
-              <button
-                type="button"
-                onClick={() => {
-                  sounds.playClick();
-                  setActiveStep('details');
-                }}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-900 flex items-center gap-1 cursor-pointer"
-              >
-                ← Back to Subscription Details
-              </button>
-
-              {/* Dedicated Payment Gateway Component */}
-              <PaymentGateway
-                planAmount={planAmount}
-                onSubmitReference={(method, ref) => {
-                  onSubmitReference(method, ref);
-                }}
-                onClose={onClose}
-                isAlreadyPending={isAlreadyPending}
-                existingPendingRef={existingPendingRef}
-              />
             </div>
           )}
         </div>
