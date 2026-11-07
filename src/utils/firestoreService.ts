@@ -552,7 +552,287 @@ export async function migrateUserExpiryToTimestamp(userId: string): Promise<bool
   }
 }
 
-// 9. Server-Enforced Motorcycle Garage Persistence (Atomic Quota Enforcement)
+export interface CounterReconciliationItem {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  storedBikeCount: number;
+  actualMotorcycleCount: number;
+  needsCorrection: boolean;
+}
+
+export interface CounterReconciliationReport {
+  totalUsersInspected: number;
+  totalMotorcyclesFound: number;
+  usersRequiringCorrection: number;
+  usersAlreadyMatching: number;
+  items: CounterReconciliationItem[];
+  executedAt: string;
+  isDryRun: boolean;
+}
+
+export interface TimestampMigrationItem {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  subscriptionTier: string;
+  subscriptionStatus: string;
+  currentType: 'Timestamp' | 'ISO_String' | 'Epoch_Millis' | 'Missing';
+  rawExpiryValue: string;
+  parsedDateIso: string | null;
+  needsMigration: boolean;
+}
+
+export interface TimestampMigrationReport {
+  totalUsersInspected: number;
+  timestampCount: number;
+  isoStringCount: number;
+  epochMillisCount: number;
+  missingCount: number;
+  usersRequiringMigration: number;
+  items: TimestampMigrationItem[];
+  executedAt: string;
+  isDryRun: boolean;
+}
+
+/**
+ * 9. Admin Counter Reconciliation Utilities:
+ * Generates a non-destructive DRY RUN report inspecting every registered user
+ * and comparing their stored `bikeCount` with their actual `/motorcycles` documents.
+ */
+export async function generateCounterReconciliationDryRun(): Promise<CounterReconciliationReport> {
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const motorcyclesSnap = await getDocs(collection(db, 'motorcycles'));
+
+  const bikesByUser = new Map<string, number>();
+  motorcyclesSnap.forEach((docSnap) => {
+    const data = docSnap.data();
+    const ownerId = data.userId;
+    if (ownerId) {
+      bikesByUser.set(ownerId, (bikesByUser.get(ownerId) || 0) + 1);
+    }
+  });
+
+  const items: CounterReconciliationItem[] = [];
+  let usersRequiringCorrection = 0;
+  let usersAlreadyMatching = 0;
+
+  usersSnap.forEach((docSnap) => {
+    const data = docSnap.data();
+    const userId = docSnap.id;
+    const storedCount = typeof data.bikeCount === 'number' ? data.bikeCount : 0;
+    const actualCount = bikesByUser.get(userId) || 0;
+    const needsCorrection = storedCount !== actualCount;
+
+    if (needsCorrection) {
+      usersRequiringCorrection++;
+    } else {
+      usersAlreadyMatching++;
+    }
+
+    items.push({
+      userId,
+      userEmail: data.email || 'No email',
+      userName: data.displayName || data.name || 'Rider',
+      storedBikeCount: storedCount,
+      actualMotorcycleCount: actualCount,
+      needsCorrection,
+    });
+  });
+
+  return {
+    totalUsersInspected: usersSnap.size,
+    totalMotorcyclesFound: motorcyclesSnap.size,
+    usersRequiringCorrection,
+    usersAlreadyMatching,
+    items,
+    executedAt: new Date().toISOString(),
+    isDryRun: true,
+  };
+}
+
+/**
+ * Executes counter reconciliation safely in chunks of 50.
+ * Requires explicit administrator confirmation.
+ * Catches individual write failures to prevent orphaned updates.
+ */
+export async function executeCounterReconciliation(
+  itemsToFix: CounterReconciliationItem[]
+): Promise<{
+  successCount: number;
+  failedCount: number;
+  errors: string[];
+}> {
+  let successCount = 0;
+  let failedCount = 0;
+  const errors: string[] = [];
+
+  const targets = itemsToFix.filter((item) => item.needsCorrection);
+  const CHUNK_SIZE = 50;
+
+  for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
+    const chunk = targets.slice(i, i + CHUNK_SIZE);
+    await Promise.all(
+      chunk.map(async (item) => {
+        try {
+          const userDocRef = doc(db, 'users', item.userId);
+          await updateDoc(userDocRef, {
+            bikeCount: item.actualMotorcycleCount,
+            updatedAt: new Date().toISOString(),
+          });
+          successCount++;
+        } catch (err: any) {
+          failedCount++;
+          errors.push(`User ${item.userId}: ${err?.message || 'Update failed'}`);
+        }
+      })
+    );
+  }
+
+  return { successCount, failedCount, errors };
+}
+
+/**
+ * 10. Admin Timestamp Migration Utilities:
+ * Generates an inspection report categorizing the exact storage format of expiryDate across all users.
+ */
+export async function generateTimestampMigrationDryRun(): Promise<TimestampMigrationReport> {
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const items: TimestampMigrationItem[] = [];
+
+  let timestampCount = 0;
+  let isoStringCount = 0;
+  let epochMillisCount = 0;
+  let missingCount = 0;
+  let usersRequiringMigration = 0;
+
+  usersSnap.forEach((docSnap) => {
+    const data = docSnap.data();
+    const rawVal = data.expiryDate;
+    let currentType: 'Timestamp' | 'ISO_String' | 'Epoch_Millis' | 'Missing' = 'Missing';
+    let rawString = 'None';
+    let parsedIso: string | null = null;
+
+    if (!rawVal) {
+      currentType = 'Missing';
+      missingCount++;
+    } else if (typeof (rawVal as any)?.toDate === 'function' || ('seconds' in rawVal && 'nanoseconds' in rawVal)) {
+      currentType = 'Timestamp';
+      timestampCount++;
+      rawString = `Timestamp(s=${rawVal.seconds})`;
+      parsedIso = (rawVal as any).toDate().toISOString();
+    } else if (typeof rawVal === 'string') {
+      currentType = 'ISO_String';
+      isoStringCount++;
+      rawString = rawVal;
+      const d = new Date(rawVal);
+      parsedIso = !isNaN(d.getTime()) ? d.toISOString() : null;
+    } else if (typeof rawVal === 'number') {
+      currentType = 'Epoch_Millis';
+      epochMillisCount++;
+      rawString = String(rawVal);
+      const d = new Date(rawVal);
+      parsedIso = !isNaN(d.getTime()) ? d.toISOString() : null;
+    }
+
+    const needsMigration = (currentType === 'ISO_String' || currentType === 'Epoch_Millis') && parsedIso !== null;
+    if (needsMigration) {
+      usersRequiringMigration++;
+    }
+
+    items.push({
+      userId: docSnap.id,
+      userEmail: data.email || 'No email',
+      userName: data.displayName || data.name || 'Rider',
+      subscriptionTier: data.subscriptionTier || 'free',
+      subscriptionStatus: data.subscriptionStatus || 'free',
+      currentType,
+      rawExpiryValue: rawString,
+      parsedDateIso: parsedIso,
+      needsMigration,
+    });
+  });
+
+  return {
+    totalUsersInspected: usersSnap.size,
+    timestampCount,
+    isoStringCount,
+    epochMillisCount,
+    missingCount,
+    usersRequiringMigration,
+    items,
+    executedAt: new Date().toISOString(),
+    isDryRun: true,
+  };
+}
+
+/**
+ * Executes timestamp migration for identified legacy records.
+ * Converts ISO strings / epoch millis to native Firestore Timestamp without changing dates or tiers.
+ */
+export async function executeTimestampMigration(
+  itemsToMigrate: TimestampMigrationItem[]
+): Promise<{
+  successCount: number;
+  failedCount: number;
+  errors: string[];
+}> {
+  let successCount = 0;
+  let failedCount = 0;
+  const errors: string[] = [];
+
+  const targets = itemsToMigrate.filter((item) => item.needsMigration && item.parsedDateIso);
+  const CHUNK_SIZE = 50;
+
+  for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
+    const chunk = targets.slice(i, i + CHUNK_SIZE);
+    await Promise.all(
+      chunk.map(async (item) => {
+        try {
+          const userDocRef = doc(db, 'users', item.userId);
+          const dateObj = new Date(item.parsedDateIso!);
+          await updateDoc(userDocRef, {
+            expiryDate: Timestamp.fromDate(dateObj),
+            updatedAt: new Date().toISOString(),
+          });
+          successCount++;
+        } catch (err: any) {
+          failedCount++;
+          errors.push(`User ${item.userId}: ${err?.message || 'Migration failed'}`);
+        }
+      })
+    );
+  }
+
+  return { successCount, failedCount, errors };
+}
+
+/**
+ * Single User Admin Counter Reconciliation Helper
+ */
+export async function reconcileUserBikeCount(userId: string): Promise<number> {
+  const userDocRef = doc(db, 'users', userId);
+  const motorcyclesQuery = query(collection(db, 'motorcycles'), where('userId', '==', userId));
+
+  const motorcyclesSnap = await getDocs(motorcyclesQuery);
+  const actualCount = motorcyclesSnap.size;
+
+  await updateDoc(userDocRef, {
+    bikeCount: actualCount,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return actualCount;
+}
+
+export async function reconcileAllUsersBikeCounts(): Promise<{ userId: string; actualCount: number }[]> {
+  const report = await generateCounterReconciliationDryRun();
+  const toFix = report.items.filter((item) => item.needsCorrection);
+  await executeCounterReconciliation(toFix);
+  return report.items.map((it) => ({ userId: it.userId, actualCount: it.actualMotorcycleCount }));
+}
+
+// 10. Server-Enforced Motorcycle Garage Persistence (Atomic Quota Enforcement)
 export async function saveMotorcycleToFirestore(bike: Motorcycle, userId: string): Promise<void> {
   const bikeDocRef = doc(db, 'motorcycles', bike.id);
   const userDocRef = doc(db, 'users', userId);

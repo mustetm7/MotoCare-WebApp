@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActiveTab, Motorcycle, UserSubscription } from '../types';
-import { Bell, ChevronDown, Plus, Sparkles, Check, Vibrate, AlertTriangle } from 'lucide-react';
+import { Bell, ChevronDown, Plus, Sparkles, Check, Vibrate, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import { PWAInstallButton } from './PWAInstallButton';
 import { MaintenanceReminder } from '../types';
@@ -24,6 +24,7 @@ interface NavbarProps {
   onOpenPaywall: () => void;
   onOpenCasaBooklet?: () => void;
   onGoToHome?: () => void;
+  onOpenAdminPortal?: () => void;
   overdueCount: number;
   overdueReminders?: MaintenanceReminder[];
   onOpenServiceForReminder?: (reminder: MaintenanceReminder) => void;
@@ -41,11 +42,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAddService,
   onOpenPaywall,
   onGoToHome,
+  onOpenAdminPortal,
   overdueCount,
   overdueReminders = [],
   onOpenServiceForReminder,
 }) => {
-  const { user, signIn, signOut } = useAuth();
+  const { user, isAdmin, signIn, signOut } = useAuth();
+  const isExactAdmin = user?.email?.toLowerCase() === 'mustetm7@gmail.com';
   const [bikeMenuOpen, setBikeMenuOpen] = React.useState(false);
   const [bellOpen, setBellOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
@@ -252,6 +255,22 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="relative flex flex-col items-end justify-center shrink-0 min-w-0" ref={dropdownRef}>
               {/* UPGRADE / PRO Button & Google User Avatar */}
               <div className="flex items-center gap-1 sm:gap-1.5">
+                {/* Visible Admin Portal button for verified owner */}
+                {isExactAdmin && onOpenAdminPortal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playClick();
+                      onOpenAdminPortal();
+                    }}
+                    className="px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg sm:rounded-xl bg-gradient-to-r from-amber-500 to-[#FF6B00] hover:from-amber-600 hover:to-[#e05e00] text-slate-950 font-black text-[10px] sm:text-xs flex items-center gap-1 shadow-md shadow-orange-500/25 transition-all shrink-0 cursor-pointer active:scale-95"
+                    title="Open MotoCare Owner & Admin Portal"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-slate-950 shrink-0" />
+                    <span>Admin</span>
+                  </button>
+                )}
+
                 {isPro ? (
                   <button
                     type="button"
@@ -321,6 +340,28 @@ export const Navbar: React.FC<NavbarProps> = ({
                           {isPro ? '★ Pro Member' : 'Free Tier'}
                         </span>
                       </div>
+
+                      {/* Admin Portal quick link for verified owner */}
+                      {isExactAdmin && onOpenAdminPortal && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUserMenuOpen(false);
+                            sounds.playClick();
+                            onOpenAdminPortal();
+                          }}
+                          className="w-full py-2 px-2.5 text-left text-xs font-black bg-gradient-to-r from-amber-50 to-orange-50 hover:from-amber-100 hover:to-orange-100 text-amber-950 border border-amber-300/80 rounded-xl transition-all flex items-center justify-between cursor-pointer shadow-xs my-1"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <ShieldCheck className="w-4 h-4 text-[#FF6B00]" />
+                            <span>Admin Console</span>
+                          </div>
+                          <span className="text-[9px] bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">
+                            Owner
+                          </span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => {

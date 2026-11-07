@@ -27,10 +27,13 @@ import {
   KeyRound,
   Globe,
   AlertTriangle,
+  Activity,
+  Database,
 } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import confetti from 'canvas-confetti';
-import { auth, signInWithGoogle, logOut } from '../utils/firebase';
+import { auth, db, signInWithGoogle, logOut } from '../utils/firebase';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import {
   subscribeToAllPaymentSubmissions,
   subscribeToAllUsers,
@@ -41,6 +44,12 @@ import {
   calculateDaysRemaining,
   parseExpiryToDate,
   migrateUserExpiryToTimestamp,
+  generateCounterReconciliationDryRun,
+  executeCounterReconciliation,
+  generateTimestampMigrationDryRun,
+  executeTimestampMigration,
+  CounterReconciliationReport,
+  TimestampMigrationReport,
   PaymentSubmission,
 } from '../utils/firestoreService';
 
@@ -93,6 +102,206 @@ function formatManilaDateString(dateVal?: unknown): string {
   } catch {
     return String(dateVal);
   }
+}
+
+export interface CounterHealthUserItem {
+  userId: string;
+  email: string;
+  displayName: string;
+  storedBikeCount: number;
+  calculatedDocCount: number;
+  delta: number;
+  needsCorrection: boolean;
+}
+
+export interface CounterHealthSummaryReport {
+  totalUsers: number;
+  totalMotorcycleDocs: number;
+  matchingCount: number;
+  discrepancyCount: number;
+  items: CounterHealthUserItem[];
+  inspectedAt: string;
+}
+
+/**
+ * Dry-run utility function in AdminUsersPortal.tsx:
+ * Fetches all users, compares their current document count against their stored bikeCount,
+ * and returns a summary report object without performing any writes.
+ */
+export async function runCounterDryRunHealthAudit(): Promise<CounterHealthSummaryReport> {
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const items: CounterHealthUserItem[] = [];
+  let totalMotorcycleDocs = 0;
+  let matchingCount = 0;
+  let discrepancyCount = 0;
+
+  for (const userDoc of usersSnap.docs) {
+    const userData = userDoc.data();
+    const storedCount = typeof userData.bikeCount === 'number' ? userData.bikeCount : 0;
+
+    const bikesQuery = query(collection(db, 'motorcycles'), where('userId', '==', userDoc.id));
+    const bikesSnap = await getDocs(bikesQuery);
+    const calculatedDocCount = bikesSnap.size;
+    totalMotorcycleDocs += calculatedDocCount;
+
+    const delta = calculatedDocCount - storedCount;
+    const needsCorrection = delta !== 0;
+
+    if (needsCorrection) {
+      discrepancyCount++;
+    } else {
+      matchingCount++;
+    }
+
+    items.push({
+      userId: userDoc.id,
+      email: userData.email || 'No email',
+      displayName: userData.displayName || userData.name || 'Rider',
+      storedBikeCount: storedCount,
+      calculatedDocCount,
+      delta,
+      needsCorrection,
+    });
+  }
+
+  return {
+    totalUsers: usersSnap.size,
+    totalMotorcycleDocs,
+    matchingCount,
+    discrepancyCount,
+    items,
+    inspectedAt: new Date().toISOString(),
+  };
+}
+
+export interface ExpiryDateDiagnosticItem {
+  userId: string;
+  email: string;
+  displayName: string;
+  subscriptionTier: string;
+  currentFormat: 'ISO_8601_STRING' | 'FIRESTORE_TIMESTAMP' | 'EPOCH_NUMBER' | 'NONE_OR_FREE';
+  rawValue: string;
+  isIso8601String: boolean;
+  needsConversion: boolean;
+  equivalentTimestampPreview: {
+    seconds: number;
+    nanoseconds: number;
+    isoDateString: string;
+    formattedManila: string;
+  } | null;
+}
+
+export interface ExpiryDateDiagnosticReport {
+  totalUsers: number;
+  iso8601Count: number;
+  nativeTimestampCount: number;
+  epochNumberCount: number;
+  noneOrFreeCount: number;
+  items: ExpiryDateDiagnosticItem[];
+  inspectedAt: string;
+}
+
+/**
+ * Diagnostic view utility in AdminUsersPortal.tsx:
+ * Iterates through all user documents, checks for the presence of an ISO 8601 string
+ * in the expiryDate field, and flags those needing conversion to Firestore Timestamps.
+ * Previews the equivalent Timestamp conversion without applying it to production data.
+ */
+export async function runExpiryDateDiagnosticAudit(): Promise<ExpiryDateDiagnosticReport> {
+  const usersSnap = await getDocs(collection(db, 'users'));
+  const items: ExpiryDateDiagnosticItem[] = [];
+  let iso8601Count = 0;
+  let nativeTimestampCount = 0;
+  let epochNumberCount = 0;
+  let noneOrFreeCount = 0;
+
+  for (const userDoc of usersSnap.docs) {
+    const data = userDoc.data();
+    const rawVal = data.expiryDate;
+    let currentFormat: 'ISO_8601_STRING' | 'FIRESTORE_TIMESTAMP' | 'EPOCH_NUMBER' | 'NONE_OR_FREE' = 'NONE_OR_FREE';
+    let rawValue = 'None / Free';
+    let isIso8601String = false;
+    let needsConversion = false;
+    let equivalentTimestampPreview: {
+      seconds: number;
+      nanoseconds: number;
+      isoDateString: string;
+      formattedManila: string;
+    } | null = null;
+
+    if (!rawVal) {
+      currentFormat = 'NONE_OR_FREE';
+      noneOrFreeCount++;
+    } else if (typeof (rawVal as any)?.toDate === 'function' || ('seconds' in rawVal && 'nanoseconds' in rawVal)) {
+      currentFormat = 'FIRESTORE_TIMESTAMP';
+      nativeTimestampCount++;
+      const seconds = (rawVal as any).seconds ?? 0;
+      const nanoseconds = (rawVal as any).nanoseconds ?? 0;
+      const d = typeof (rawVal as any)?.toDate === 'function' ? (rawVal as any).toDate() : new Date(seconds * 1000);
+      rawValue = `Timestamp(seconds=${seconds}, nanos=${nanoseconds})`;
+      equivalentTimestampPreview = {
+        seconds,
+        nanoseconds,
+        isoDateString: d.toISOString(),
+        formattedManila: formatManilaDateString(d),
+      };
+    } else if (typeof rawVal === 'string') {
+      currentFormat = 'ISO_8601_STRING';
+      isIso8601String = true;
+      rawValue = rawVal;
+      const d = new Date(rawVal);
+      if (!isNaN(d.getTime())) {
+        iso8601Count++;
+        needsConversion = true;
+        const seconds = Math.floor(d.getTime() / 1000);
+        const nanoseconds = (d.getTime() % 1000) * 1_000_000;
+        equivalentTimestampPreview = {
+          seconds,
+          nanoseconds,
+          isoDateString: d.toISOString(),
+          formattedManila: formatManilaDateString(d),
+        };
+      }
+    } else if (typeof rawVal === 'number') {
+      currentFormat = 'EPOCH_NUMBER';
+      epochNumberCount++;
+      rawValue = String(rawVal);
+      const d = new Date(rawVal);
+      if (!isNaN(d.getTime())) {
+        needsConversion = true;
+        const seconds = Math.floor(d.getTime() / 1000);
+        const nanoseconds = (d.getTime() % 1000) * 1_000_000;
+        equivalentTimestampPreview = {
+          seconds,
+          nanoseconds,
+          isoDateString: d.toISOString(),
+          formattedManila: formatManilaDateString(d),
+        };
+      }
+    }
+
+    items.push({
+      userId: userDoc.id,
+      email: data.email || 'No email',
+      displayName: data.displayName || data.name || 'Rider',
+      subscriptionTier: data.subscriptionTier || 'free',
+      currentFormat,
+      rawValue,
+      isIso8601String,
+      needsConversion,
+      equivalentTimestampPreview,
+    });
+  }
+
+  return {
+    totalUsers: usersSnap.size,
+    iso8601Count,
+    nativeTimestampCount,
+    epochNumberCount,
+    noneOrFreeCount,
+    items,
+    inspectedAt: new Date().toISOString(),
+  };
 }
 
 export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
@@ -149,11 +358,130 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [copiedRefId, setCopiedRefId] = useState<string | null>(null);
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
 
-  // Approval confirmation modal state
   const [approvalPreview, setApprovalPreview] = useState<ApprovalPreview | null>(null);
   const [isApproving, setIsApproving] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  // Counter Reconciliation Dry Run & Execution State
+  const [counterReport, setCounterReport] = useState<CounterReconciliationReport | null>(null);
+  const [showCounterModal, setShowCounterModal] = useState(false);
+  const [isInspectingCounters, setIsInspectingCounters] = useState(false);
+  const [isExecutingCounters, setIsExecutingCounters] = useState(false);
+  const [confirmExecuteCounters, setConfirmExecuteCounters] = useState(false);
+
+  // Timestamp Migration Dry Run & Execution State
+  const [timestampReport, setTimestampReport] = useState<TimestampMigrationReport | null>(null);
+  const [showTimestampModal, setShowTimestampModal] = useState(false);
+  const [isInspectingTimestamps, setIsInspectingTimestamps] = useState(false);
+  const [isExecutingTimestamps, setIsExecutingTimestamps] = useState(false);
+  const [confirmExecuteTimestamps, setConfirmExecuteTimestamps] = useState(false);
+  const [portalToast, setPortalToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Admin Navigation: 'directory' for rider subscriptions list, 'system_health' for System Health section
+  const [activeAdminTab, setActiveAdminTab] = useState<'directory' | 'system_health'>('directory');
+  const [healthCounterReport, setHealthCounterReport] = useState<CounterHealthSummaryReport | null>(null);
+  const [healthExpiryReport, setHealthExpiryReport] = useState<ExpiryDateDiagnosticReport | null>(null);
+  const [isLoadingHealth, setIsLoadingHealth] = useState(false);
+  const [healthFilter, setHealthFilter] = useState<'all' | 'flagged'>('all');
+
+  const handleRunSystemHealthAudit = async () => {
+    setIsLoadingHealth(true);
+    sounds.playClick();
+    try {
+      const [cReport, eReport] = await Promise.all([
+        runCounterDryRunHealthAudit(),
+        runExpiryDateDiagnosticAudit(),
+      ]);
+      setHealthCounterReport(cReport);
+      setHealthExpiryReport(eReport);
+      sounds.playSuccess();
+      setPortalToast({
+        msg: `System Health dry-run complete: ${cReport.discrepancyCount} counter discrepancies, ${eReport.iso8601Count} ISO-8601 strings flagged. 0 database writes executed.`,
+        type: (cReport.discrepancyCount > 0 || eReport.iso8601Count > 0) ? 'info' : 'success',
+      });
+    } catch (err: any) {
+      console.error('System health audit failed:', err);
+      setPortalToast({ msg: 'Health audit failed: ' + (err?.message || 'Check permissions'), type: 'error' });
+    } finally {
+      setIsLoadingHealth(false);
+    }
+  };
+
+  const handleOpenCounterDryRun = async () => {
+    setIsInspectingCounters(true);
+    sounds.playClick();
+    try {
+      const report = await generateCounterReconciliationDryRun();
+      setCounterReport(report);
+      setConfirmExecuteCounters(false);
+      setShowCounterModal(true);
+      sounds.playSuccess();
+    } catch (err: any) {
+      console.error('Failed to generate counter dry run:', err);
+      setPortalToast({ msg: 'Counter inspection failed: ' + (err?.message || 'Check permissions'), type: 'error' });
+    } finally {
+      setIsInspectingCounters(false);
+    }
+  };
+
+  const handleExecuteConfirmedCounterReconciliation = async () => {
+    if (!counterReport) return;
+    setIsExecutingCounters(true);
+    sounds.playClick();
+    try {
+      const res = await executeCounterReconciliation(counterReport.items);
+      sounds.playSuccess();
+      setPortalToast({
+        msg: `Reconciliation committed: ${res.successCount} users corrected, ${res.failedCount} failures.`,
+        type: res.failedCount > 0 ? 'info' : 'success',
+      });
+      setShowCounterModal(false);
+      setConfirmExecuteCounters(false);
+    } catch (err: any) {
+      console.error('Failed to execute reconciliation:', err);
+      setPortalToast({ msg: 'Reconciliation error: ' + (err?.message || 'Unknown error'), type: 'error' });
+    } finally {
+      setIsExecutingCounters(false);
+    }
+  };
+
+  const handleOpenTimestampDryRun = async () => {
+    setIsInspectingTimestamps(true);
+    sounds.playClick();
+    try {
+      const report = await generateTimestampMigrationDryRun();
+      setTimestampReport(report);
+      setConfirmExecuteTimestamps(false);
+      setShowTimestampModal(true);
+      sounds.playSuccess();
+    } catch (err: any) {
+      console.error('Failed to generate timestamp dry run:', err);
+      setPortalToast({ msg: 'Timestamp inspection failed: ' + (err?.message || 'Check permissions'), type: 'error' });
+    } finally {
+      setIsInspectingTimestamps(false);
+    }
+  };
+
+  const handleExecuteConfirmedTimestampMigration = async () => {
+    if (!timestampReport) return;
+    setIsExecutingTimestamps(true);
+    sounds.playClick();
+    try {
+      const res = await executeTimestampMigration(timestampReport.items);
+      sounds.playSuccess();
+      setPortalToast({
+        msg: `Timestamp migration committed: ${res.successCount} converted to native Timestamp, ${res.failedCount} failures.`,
+        type: res.failedCount > 0 ? 'info' : 'success',
+      });
+      setShowTimestampModal(false);
+      setConfirmExecuteTimestamps(false);
+    } catch (err: any) {
+      console.error('Failed to execute timestamp migration:', err);
+      setPortalToast({ msg: 'Migration error: ' + (err?.message || 'Unknown error'), type: 'error' });
+    } finally {
+      setIsExecutingTimestamps(false);
+    }
+  };
 
   // Form state for adding user
   const [newName, setNewName] = useState('');
@@ -621,6 +949,28 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             <span className="font-mono text-amber-300 font-bold">{auth.currentUser?.email}</span>
           </div>
 
+          <button
+            type="button"
+            onClick={handleOpenCounterDryRun}
+            disabled={isInspectingCounters}
+            title="Inspect all user motorcycle counts in Dry-Run mode without updating records"
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isInspectingCounters ? 'animate-spin text-amber-400' : ''}`} />
+            <span className="hidden sm:inline">{isInspectingCounters ? 'Inspecting...' : 'Reconcile Counters (Dry Run)'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleOpenTimestampDryRun}
+            disabled={isInspectingTimestamps}
+            title="Inspect user subscription expiration date types in Dry-Run mode"
+            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            <Clock className={`w-3.5 h-3.5 ${isInspectingTimestamps ? 'animate-spin text-cyan-400' : ''}`} />
+            <span className="hidden sm:inline">{isInspectingTimestamps ? 'Auditing...' : 'Timestamp Audit (Dry Run)'}</span>
+          </button>
+
           {onReturnToApp && (
             <button
               type="button"
@@ -642,10 +992,110 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         </div>
       </header>
 
+      {portalToast && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-3">
+          <div
+            className={`p-3 rounded-2xl text-xs flex items-center justify-between border ${
+              portalToast.type === 'error'
+                ? 'bg-red-500/10 border-red-500/30 text-red-300'
+                : portalToast.type === 'info'
+                ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{portalToast.msg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPortalToast(null)}
+              className="hover:opacity-75 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
-        {/* KPI Stats Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+        {/* Navigation Tabs: Rider Subscriptions vs System Health */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveAdminTab('directory')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                activeAdminTab === 'directory'
+                  ? 'bg-[#FF6B00] text-white shadow-lg shadow-orange-500/20'
+                  : 'bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Rider Directory & Subscriptions</span>
+              <span className="ml-1 px-1.5 py-0.5 rounded bg-slate-950/50 text-[10px] font-mono">
+                {allUsers.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveAdminTab('system_health');
+                if (!healthCounterReport && !isLoadingHealth) {
+                  handleRunSystemHealthAudit();
+                }
+              }}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                activeAdminTab === 'system_health'
+                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
+                  : 'bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Activity className="w-4 h-4 text-cyan-300" />
+              <span>System Health</span>
+              {healthCounterReport && ((healthCounterReport.discrepancyCount > 0) || ((healthExpiryReport?.iso8601Count ?? 0) > 0)) ? (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold">
+                  {(healthCounterReport.discrepancyCount) + (healthExpiryReport?.iso8601Count ?? 0)}
+                </span>
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              )}
+            </button>
+          </div>
+
+          {activeAdminTab === 'system_health' && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setHealthFilter(healthFilter === 'all' ? 'flagged' : 'all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  healthFilter === 'flagged'
+                    ? 'bg-amber-500 text-slate-950 font-black'
+                    : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {healthFilter === 'flagged' ? 'Showing Flagged Issues Only' : 'Show All Inspected'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRunSystemHealthAudit}
+                disabled={isLoadingHealth}
+                className="px-3.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingHealth ? 'animate-spin text-cyan-400' : ''}`} />
+                <span>{isLoadingHealth ? 'Auditing Database...' : 'Run Full Health Audit'}</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {activeAdminTab === 'directory' ? (
+          <>
+            {/* KPI Stats Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
           {/* Card 1: Total Riders */}
           <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm space-y-1">
             <div className="flex items-center justify-between text-slate-400">
@@ -1009,7 +1459,295 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             })
           )}
         </div>
-      </main>
+      </>
+    ) : (
+      /* ======================================================== */
+      /* SYSTEM HEALTH & INTEGRITY DIAGNOSTIC VIEW                */
+      /* ======================================================== */
+      <div className="space-y-6 animate-in fade-in duration-150">
+        {/* Health KPI Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm space-y-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider">Total Users Inspected</span>
+              <Users className="w-4 h-4 text-slate-500" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black text-white font-mono">
+              {healthCounterReport?.totalUsers ?? allUsers.length}
+            </div>
+            <div className="text-[11px] text-slate-500 font-medium">Production Firestore profiles</div>
+          </div>
+
+          <div className={`p-4 rounded-2xl bg-slate-900 border shadow-sm space-y-1 ${
+            (healthCounterReport?.discrepancyCount ?? 0) > 0 ? 'border-amber-500/50 bg-amber-500/5' : 'border-emerald-500/30'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Counter Synchronicity</span>
+              <Bike className="w-4 h-4 text-orange-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black font-mono text-white">
+              {healthCounterReport ? (
+                healthCounterReport.discrepancyCount === 0 ? (
+                  <span className="text-emerald-400">100% Sync</span>
+                ) : (
+                  <span className="text-amber-400">{healthCounterReport.discrepancyCount} Desynced</span>
+                )
+              ) : (
+                '...'
+              )}
+            </div>
+            <div className="text-[11px] text-slate-400 font-medium">
+              {healthCounterReport ? `${healthCounterReport.matchingCount} aligned, ${healthCounterReport.totalMotorcycleDocs} bikes` : 'Awaiting audit'}
+            </div>
+          </div>
+
+          <div className={`p-4 rounded-2xl bg-slate-900 border shadow-sm space-y-1 ${
+            (healthExpiryReport?.iso8601Count ?? 0) > 0 ? 'border-blue-500/50 bg-blue-500/5' : 'border-emerald-500/30'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Expiry Format Audit</span>
+              <Clock className="w-4 h-4 text-cyan-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black font-mono text-white">
+              {healthExpiryReport ? (
+                healthExpiryReport.iso8601Count === 0 ? (
+                  <span className="text-emerald-400">All Native</span>
+                ) : (
+                  <span className="text-blue-400">{healthExpiryReport.iso8601Count} ISO String</span>
+                )
+              ) : (
+                '...'
+              )}
+            </div>
+            <div className="text-[11px] text-slate-400 font-medium">
+              {healthExpiryReport ? `${healthExpiryReport.nativeTimestampCount} native Timestamps` : 'Awaiting audit'}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-sm space-y-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider">Dry-Run Safety</span>
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">
+              0 Writes
+            </div>
+            <div className="text-[11px] text-slate-500 font-medium">Read-only diagnostic analysis</div>
+          </div>
+        </div>
+
+        {/* Diagnostic Panel 1: Motorcycle Counter Synchronicity Dry-Run */}
+        <div className="p-5 bg-slate-900 border border-slate-800 rounded-3xl space-y-4 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-orange-500/15 border border-orange-500/30 text-orange-400 rounded-2xl">
+                <Bike className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white flex items-center gap-2">
+                  <span>Motorcycle Counter Synchronicity Dry-Run</span>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-mono text-slate-400">
+                    Read-Only
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Fetches all user profiles and compares stored <code className="text-orange-300">bikeCount</code> against actual count of motorcycle documents in <code className="text-orange-300">/motorcycles</code>.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleOpenCounterDryRun}
+              className="px-3.5 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-orange-600/20 flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Review Counter Reconciliation</span>
+            </button>
+          </div>
+
+          {isLoadingHealth && !healthCounterReport ? (
+            <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+              <RefreshCw className="w-6 h-6 animate-spin text-orange-400" />
+              <span>Comparing stored bikeCount with live motorcycle documents across all users...</span>
+            </div>
+          ) : healthCounterReport ? (
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+              {(healthFilter === 'flagged'
+                ? healthCounterReport.items.filter((item) => item.needsCorrection)
+                : healthCounterReport.items
+              )
+                .sort((a, b) => (b.needsCorrection ? 1 : 0) - (a.needsCorrection ? 1 : 0))
+                .map((item) => (
+                  <div
+                    key={item.userId}
+                    className={`p-3 rounded-2xl border text-xs flex items-center justify-between ${
+                      item.needsCorrection
+                        ? 'bg-amber-500/10 border-amber-500/30 text-slate-200'
+                        : 'bg-slate-950/40 border-slate-800/60 text-slate-400'
+                    }`}
+                  >
+                    <div className="min-w-0 pr-3">
+                      <div className="font-bold text-white truncate flex items-center gap-2">
+                        <span>{item.email || item.displayName || item.userId}</span>
+                        {item.needsCorrection && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black uppercase">
+                            Count Discrepancy Flagged
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5 flex items-center gap-2">
+                        <span>UID: {item.userId}</span>
+                        <span>•</span>
+                        <span>Stored bikeCount: <strong className="text-slate-200">{item.storedBikeCount}</strong></span>
+                        <span>•</span>
+                        <span>Calculated docs: <strong className="text-white">{item.calculatedDocCount}</strong></span>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0 flex items-center gap-3">
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-500 block">Delta</span>
+                        <span className={`font-mono font-bold text-xs ${
+                          item.delta > 0 ? 'text-amber-400' : item.delta < 0 ? 'text-rose-400' : 'text-slate-500'
+                        }`}>
+                          {item.delta > 0 ? `+${item.delta}` : item.delta}
+                        </span>
+                      </div>
+                      {item.needsCorrection ? (
+                        <span className="px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-lg text-[10px] font-black">
+                          Target: {item.calculatedDocCount}
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-[10px] font-bold">
+                          Synchronized ✓
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="py-8 text-center text-slate-400 text-xs">
+              Click "Run Full Health Audit" to inspect all user motorcycle counters.
+            </div>
+          )}
+        </div>
+
+        {/* Diagnostic Panel 2: ISO 8601 String Expiry Date Diagnostic View */}
+        <div className="p-5 bg-slate-900 border border-slate-800 rounded-3xl space-y-4 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-blue-500/15 border border-blue-500/30 text-blue-400 rounded-2xl">
+                <Clock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white flex items-center gap-2">
+                  <span>ISO 8601 String Expiry Date Diagnostic View</span>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] font-mono text-slate-400">
+                    Diagnostic Only
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Iterates through all user documents, checks for the presence of an ISO 8601 string in the <code className="text-blue-300">expiryDate</code> field, and shows the equivalent Timestamp conversion without applying it to production data.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleOpenTimestampDryRun}
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-600/20 flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Review Timestamp Migration</span>
+            </button>
+          </div>
+
+          {isLoadingHealth && !healthExpiryReport ? (
+            <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center justify-center gap-2">
+              <RefreshCw className="w-6 h-6 animate-spin text-blue-400" />
+              <span>Inspecting user expiryDate fields and generating equivalent Timestamp previews...</span>
+            </div>
+          ) : healthExpiryReport ? (
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+              {(healthFilter === 'flagged'
+                ? healthExpiryReport.items.filter((item) => item.needsConversion)
+                : healthExpiryReport.items
+              )
+                .sort((a, b) => (b.needsConversion ? 1 : 0) - (a.needsConversion ? 1 : 0))
+                .map((item) => (
+                  <div
+                    key={item.userId}
+                    className={`p-3 rounded-2xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                      item.needsConversion
+                        ? 'bg-blue-500/10 border-blue-500/30 text-slate-200'
+                        : 'bg-slate-950/40 border-slate-800/60 text-slate-400'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-white truncate flex items-center gap-2">
+                        <span>{item.email || item.displayName || item.userId}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] font-mono text-slate-400 uppercase">
+                          {item.subscriptionTier}
+                        </span>
+                        {item.isIso8601String && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black uppercase">
+                            Flagged: ISO 8601 String
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-1 space-y-0.5">
+                        <div>
+                          <span>Stored Value: </span>
+                          <strong className={item.isIso8601String ? 'text-amber-300' : 'text-slate-300'}>
+                            {item.rawValue}
+                          </strong>
+                          <span className="mx-2 text-slate-600">|</span>
+                          <span>Format: </span>
+                          <span className="text-slate-300">{item.currentFormat}</span>
+                        </div>
+                        {item.equivalentTimestampPreview && (
+                          <div className="text-blue-300 flex items-center gap-2 flex-wrap">
+                            <span>Equivalent Timestamp:</span>
+                            <code className="bg-slate-950/80 px-1.5 py-0.5 rounded text-emerald-400">
+                              Timestamp(seconds={item.equivalentTimestampPreview.seconds}, nanoseconds={item.equivalentTimestampPreview.nanoseconds})
+                            </code>
+                            <span className="text-slate-400 text-[10px]">
+                              ({item.equivalentTimestampPreview.formattedManila})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      {item.needsConversion ? (
+                        <span className="px-2.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/40 rounded-lg text-[10px] font-black">
+                          Needs Timestamp Conversion
+                        </span>
+                      ) : item.currentFormat === 'FIRESTORE_TIMESTAMP' ? (
+                        <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-[10px] font-bold">
+                          Native Timestamp Compliant ✓
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 bg-slate-800 text-slate-400 border border-slate-700 rounded-lg text-[10px]">
+                          Free Plan / No Expiry
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="py-8 text-center text-slate-400 text-xs">
+              Click "Run Full Health Audit" to inspect all user expiration date formats.
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+  </main>
 
       {/* ======================================================== */}
       {/* APPROVAL CONFIRMATION MODAL WITH EXPIRATION PREVIEW      */}
@@ -1104,6 +1842,347 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Counter Reconciliation Dry Run Modal */}
+      {showCounterModal && counterReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-orange-500/10 border border-orange-500/20 text-orange-400 rounded-xl">
+                  <RefreshCw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">Motorcycle Counter Reconciliation Dry Run</h3>
+                  <p className="text-xs text-slate-400">Non-destructive inspection of stored vs actual bike counts</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCounterModal(false);
+                  setConfirmExecuteCounters(false);
+                }}
+                className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-4">
+              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-center">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Inspected</span>
+                <span className="text-lg font-black text-white">{counterReport.totalUsersInspected}</span>
+                <span className="text-[10px] text-slate-500 block">riders</span>
+              </div>
+              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-center">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Motorcycles Found</span>
+                <span className="text-lg font-black text-white">{counterReport.totalMotorcyclesFound}</span>
+                <span className="text-[10px] text-slate-500 block">documents</span>
+              </div>
+              <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20 text-center">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Already Matching</span>
+                <span className="text-lg font-black text-emerald-400">{counterReport.usersAlreadyMatching}</span>
+                <span className="text-[10px] text-emerald-500/80 block">no action needed</span>
+              </div>
+              <div className="bg-amber-500/10 p-3 rounded-xl border border-amber-500/20 text-center">
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Count Differences</span>
+                <span className="text-lg font-black text-amber-400">{counterReport.usersRequiringCorrection}</span>
+                <span className="text-[10px] text-amber-500/80 block">requires sync</span>
+              </div>
+            </div>
+
+            {/* User List with Discrepancy Indicators */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 my-2">
+              <div className="flex items-center justify-between px-1 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                <span>Rider Account & Stored vs Calculated Difference</span>
+                <span>Delta</span>
+              </div>
+              {[...counterReport.items]
+                .sort((a, b) => (b.needsCorrection ? 1 : 0) - (a.needsCorrection ? 1 : 0))
+                .map((item) => {
+                  const diff = item.actualMotorcycleCount - item.storedBikeCount;
+                  return (
+                    <div
+                      key={item.userId}
+                      className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                        item.needsCorrection
+                          ? 'bg-amber-500/10 border-amber-500/30 text-slate-200'
+                          : 'bg-slate-950/40 border-slate-800/60 text-slate-400'
+                      }`}
+                    >
+                      <div className="min-w-0 pr-3">
+                        <div className="font-bold text-white truncate flex items-center gap-2">
+                          <span>{item.userEmail || item.userName || item.userId}</span>
+                          {item.needsCorrection && (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-black uppercase">
+                              Discrepancy Detected
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2 mt-0.5">
+                          <span>UID: {item.userId}</span>
+                          <span>•</span>
+                          <span>Stored bikeCount: <strong className="text-slate-200">{item.storedBikeCount}</strong></span>
+                          <span>•</span>
+                          <span>Calculated docs: <strong className="text-white">{item.actualMotorcycleCount}</strong></span>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0 flex items-center gap-2">
+                        {item.needsCorrection ? (
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded font-mono font-bold text-[11px] ${
+                              diff > 0 ? 'bg-amber-500/20 text-amber-300' : 'bg-red-500/20 text-red-300'
+                            }`}>
+                              Δ {diff > 0 ? `+${diff}` : diff}
+                            </span>
+                            <span className="px-2.5 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-lg text-[10px] font-black">
+                              Update to {item.actualMotorcycleCount}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-mono text-slate-500">Δ 0</span>
+                            <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-[10px] font-bold">
+                              Aligned ({item.storedBikeCount})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Separate Confirmation Step */}
+            <div className="pt-4 border-t border-slate-800 space-y-3">
+              {counterReport.usersRequiringCorrection > 0 ? (
+                <label className="flex items-start gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl cursor-pointer hover:bg-amber-500/15 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={confirmExecuteCounters}
+                    onChange={(e) => setConfirmExecuteCounters(e.target.checked)}
+                    className="mt-0.5 accent-orange-500 h-4 w-4 rounded cursor-pointer"
+                  />
+                  <div className="text-xs text-amber-200">
+                    <span className="font-bold block">Require Admin Authorization</span>
+                    <span>
+                      I have verified the dry-run differences above and authorize writing updated bikeCount values for {counterReport.usersRequiringCorrection} users in Firestore. No user data will be deleted.
+                    </span>
+                  </div>
+                </label>
+              ) : (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 font-medium">
+                  ✓ All user motorcycle counters are synchronized with actual motorcycle documents. No write operations required.
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCounterModal(false);
+                    setConfirmExecuteCounters(false);
+                  }}
+                  className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel / Close Dry Run
+                </button>
+                {counterReport.usersRequiringCorrection > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleExecuteConfirmedCounterReconciliation}
+                    disabled={!confirmExecuteCounters || isExecutingCounters}
+                    className="flex-1 py-2.5 px-4 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs rounded-xl shadow-lg shadow-orange-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isExecutingCounters ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Committing Reconciliations...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Commit {counterReport.usersRequiringCorrection} Reconciliations</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Timestamp Migration Dry Run Modal */}
+      {showTimestampModal && timestampReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-xl">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">ISO-8601 String to Firestore Timestamp Audit</h3>
+                  <p className="text-xs text-slate-400">Previews conversion of string expiryDate values without modifying database records</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTimestampModal(false);
+                  setConfirmExecuteTimestamps(false);
+                }}
+                className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-4">
+              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-center">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Inspected</span>
+                <span className="text-lg font-black text-white">{timestampReport.totalUsersInspected}</span>
+                <span className="text-[10px] text-slate-500 block">users</span>
+              </div>
+              <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20 text-center">
+                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Native Timestamp</span>
+                <span className="text-lg font-black text-emerald-400">{timestampReport.timestampCount}</span>
+                <span className="text-[10px] text-emerald-500/80 block">compliant</span>
+              </div>
+              <div className="bg-blue-500/10 p-3 rounded-xl border border-blue-500/20 text-center">
+                <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider block">ISO String / MS</span>
+                <span className="text-lg font-black text-blue-400">{timestampReport.isoStringCount + timestampReport.epochMillisCount}</span>
+                <span className="text-[10px] text-blue-500/80 block">need conversion</span>
+              </div>
+              <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700 text-center">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Free / Missing</span>
+                <span className="text-lg font-black text-slate-300">{timestampReport.missingCount}</span>
+                <span className="text-[10px] text-slate-500 block">no expiry</span>
+              </div>
+            </div>
+
+            {/* User List with Conversion Details */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 my-2">
+              <div className="flex items-center justify-between px-1 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                <span>Rider & Expiry Format Detection</span>
+                <span>Target Conversion Preview</span>
+              </div>
+              {[...timestampReport.items]
+                .sort((a, b) => (b.needsMigration ? 1 : 0) - (a.needsMigration ? 1 : 0))
+                .map((item) => (
+                  <div
+                    key={item.userId}
+                    className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                      item.needsMigration
+                        ? 'bg-blue-500/10 border-blue-500/30 text-slate-200'
+                        : 'bg-slate-950/40 border-slate-800/60 text-slate-400'
+                    }`}
+                  >
+                    <div className="min-w-0 pr-3">
+                      <div className="font-bold text-white truncate flex items-center gap-2">
+                        <span>{item.userEmail || item.userName || item.userId}</span>
+                        <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                          {item.subscriptionTier}
+                        </span>
+                        {item.needsMigration && (
+                          <span className="px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40 text-[9px] font-black uppercase">
+                            ISO-8601 String Detected
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">
+                        Current Value: <span className="text-slate-200 font-semibold">{item.rawExpiryValue}</span>
+                        <span className="mx-1.5 text-slate-600">|</span>
+                        Detected Type: <span className="text-amber-300">{item.currentType}</span>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      {item.needsMigration ? (
+                        <div className="text-right">
+                          <span className="px-2.5 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/40 rounded-lg text-[10px] font-bold block mb-1">
+                            ➔ Timestamp Preview
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-400 block truncate max-w-[200px]">
+                            {item.parsedDateIso}
+                          </span>
+                        </div>
+                      ) : item.currentType === 'Timestamp' ? (
+                        <span className="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-[10px] font-bold">
+                          Native Timestamp ✓
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-slate-800 text-slate-400 border border-slate-700 rounded text-[10px]">
+                          Free Tier (No Expiry)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            {/* Separate Confirmation Step */}
+            <div className="pt-4 border-t border-slate-800 space-y-3">
+              {timestampReport.usersRequiringMigration > 0 ? (
+                <label className="flex items-start gap-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl cursor-pointer hover:bg-blue-500/15 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={confirmExecuteTimestamps}
+                    onChange={(e) => setConfirmExecuteTimestamps(e.target.checked)}
+                    className="mt-0.5 accent-blue-500 h-4 w-4 rounded cursor-pointer"
+                  />
+                  <div className="text-xs text-blue-200">
+                    <span className="font-bold block">Require Admin Authorization</span>
+                    <span>
+                      I have verified the preview conversions above and authorize updating expiryDate to native Firestore Timestamps for {timestampReport.usersRequiringMigration} users. No subscription tiers, payment statuses, or dates will be altered.
+                    </span>
+                  </div>
+                </label>
+              ) : (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-300 font-medium">
+                  ✓ All user expiration dates are already native Firestore Timestamps or null. No conversion writes required.
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowTimestampModal(false);
+                    setConfirmExecuteTimestamps(false);
+                  }}
+                  className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel / Close Dry Run
+                </button>
+                {timestampReport.usersRequiringMigration > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleExecuteConfirmedTimestampMigration}
+                    disabled={!confirmExecuteTimestamps || isExecutingTimestamps}
+                    className="flex-1 py-2.5 px-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-xs rounded-xl shadow-lg shadow-blue-600/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isExecutingTimestamps ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Committing Migrations...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Commit {timestampReport.usersRequiringMigration} Migrations</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

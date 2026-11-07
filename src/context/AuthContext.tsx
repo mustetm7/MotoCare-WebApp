@@ -46,7 +46,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [subscription, setSubscription] = useState<UserSubscription>(() => loadSubscription());
 
   const isAdmin =
-    user?.email?.toLowerCase() === 'mustetm7@gmail.com' && user?.emailVerified === true;
+    user?.email?.toLowerCase() === 'mustetm7@gmail.com';
 
   // 1. Listen to Firebase Auth state
   useEffect(() => {

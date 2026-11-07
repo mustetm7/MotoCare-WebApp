@@ -106,13 +106,17 @@ service cloud.firestore {
           'email', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay', 'lastPaymentId'
         ]) &&
         // Securely guard bikeCount: Riders cannot arbitrarily modify or forge bikeCount.
-        // It can only change in lockstep with consistent motorcycle creation or deletion.
+        // ANTI-REPLAY PROTECTION:
+        // 1. Create: Motorcycle MUST NOT exist before transaction (!exists), and MUST exist after (existsAfter).
+        // 2. Delete: Motorcycle MUST exist before transaction (exists) and belong to user, and MUST NOT exist after (!existsAfter).
         (
           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['bikeCount', 'lastBikeId', 'lastBikeAction']) ||
           (
             request.resource.data.lastBikeAction == 'create' &&
             request.resource.data.bikeCount == (('bikeCount' in resource.data) ? resource.data.bikeCount + 1 : 1) &&
             request.resource.data.lastBikeId is string &&
+            isValidId(request.resource.data.lastBikeId) &&
+            !exists(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)) &&
             existsAfter(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)) &&
             getAfter(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)).data.userId == userId
           ) ||
@@ -120,6 +124,9 @@ service cloud.firestore {
             request.resource.data.lastBikeAction == 'delete' &&
             request.resource.data.bikeCount == (('bikeCount' in resource.data && resource.data.bikeCount > 0) ? resource.data.bikeCount - 1 : 0) &&
             request.resource.data.lastBikeId is string &&
+            isValidId(request.resource.data.lastBikeId) &&
+            exists(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)) &&
+            get(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)).data.userId == userId &&
             !existsAfter(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId))
           )
         )
@@ -168,13 +175,14 @@ service cloud.firestore {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       
-      // CREATE: Requires authenticated owner, consistent bikeCount increment in user doc,
-      // and quota enforcement (either user is active Pro, or bikeCount before write is < 1).
+      // CREATE: Requires authenticated owner, motorcycle did not exist prior to write (!exists),
+      // consistent bikeCount increment in user doc, and quota enforcement.
       allow create: if (
         isSignedIn() &&
         request.resource.data.userId == request.auth.uid &&
         request.resource.data.id == bikeId &&
         isValidId(bikeId) &&
+        !exists(/databases/$(database)/documents/motorcycles/$(bikeId)) &&
         (
           isAdmin() ||
           (
@@ -205,12 +213,14 @@ service cloud.firestore {
         request.resource.data.id == resource.data.id
       ) || isAdmin();
 
-      // DELETE: Owner can delete their bike; must atomically decrement bikeCount in user doc.
+      // DELETE: Owner can delete their bike; requires motorcycle existed prior to delete (exists)
+      // and atomically decrements bikeCount in user doc.
       allow delete: if (
         isOwner(resource.data.userId) &&
         (
           isAdmin() ||
           (
+            exists(/databases/$(database)/documents/motorcycles/$(bikeId)) &&
             existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) &&
             getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastBikeId == bikeId &&
             getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastBikeAction == 'delete' &&

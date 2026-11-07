@@ -56,7 +56,8 @@ import { useAuth } from './context/AuthContext';
 import { saveMotorcycleToFirestore, deleteMotorcycleFromFirestore } from './utils/firestoreService';
 
 export default function App() {
-  const { user, subscription, setSubscription, submitPaymentRef } = useAuth();
+  const { user, loading: authLoading, subscription, setSubscription, submitPaymentRef } = useAuth();
+  const isExactAdmin = user?.email?.toLowerCase() === 'mustetm7@gmail.com';
 
   // --- Persistent State ---
   const [motorcycles, setMotorcycles] = React.useState<Motorcycle[]>(() => loadMotorcycles());
@@ -78,6 +79,7 @@ export default function App() {
       path === '/admin' ||
       path.startsWith('/admin/') ||
       hash === '#admin' ||
+      hash.startsWith('#admin') ||
       query === 'true'
     );
   };
@@ -288,10 +290,23 @@ export default function App() {
     setServiceRecords(serviceRecords.filter((r) => r.id !== recordId));
   };
 
+  const handleOpenAdminPortal = () => {
+    sounds.playClick();
+    if (typeof window !== 'undefined') {
+      window.location.hash = 'admin';
+    }
+    setIsAdminPortal(true);
+  };
+
   const handleCloseAdminPortal = () => {
     sounds.playClick();
     if (typeof window !== 'undefined') {
-      window.history.pushState(null, '', '/');
+      if (window.location.hash.includes('admin')) {
+        window.location.hash = '';
+      }
+      if (window.location.pathname.includes('/admin')) {
+        window.history.pushState(null, '', '/');
+      }
     }
     setIsAdminPortal(false);
   };
@@ -478,6 +493,48 @@ export default function App() {
   };
 
   if (isAdminPortal) {
+    // 1. Loading state while Firebase Auth initializes session
+    if (authLoading) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 font-sans selection:bg-[#FF6B00] selection:text-white">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 border-2 border-[#FF6B00] border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs text-slate-400 font-medium">Verifying administrator credentials...</p>
+          </div>
+        </div>
+      );
+    }
+
+    // 2. Reject authenticated non-admin users
+    if (user && !isExactAdmin) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-12 font-sans selection:bg-[#FF6B00] selection:text-white">
+          <div className="w-full max-w-md p-6 sm:p-8 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl space-y-5 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mx-auto text-xl font-bold">
+              ✕
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-lg font-black text-white">Access Denied</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                The MotoCare Admin Portal is strictly restricted to administrator <span className="font-mono text-amber-300">mustetm7@gmail.com</span>.
+              </p>
+              <p className="text-[11px] text-slate-500 pt-1">
+                You are currently signed in as <span className="font-mono text-slate-300">{user.email}</span>.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseAdminPortal}
+              className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors cursor-pointer"
+            >
+              ← Return to Garage
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // 3. Render AdminUsersPortal for exact admin or unauthenticated owner gate
     return (
       <AdminUsersPortal
         users={userAccounts}
@@ -518,6 +575,7 @@ export default function App() {
         onGoToHome={() => {
           setActiveTab('garage');
         }}
+        onOpenAdminPortal={isExactAdmin ? handleOpenAdminPortal : undefined}
         overdueCount={overdueCount}
         overdueReminders={overdueReminders}
         onOpenServiceForReminder={(rem) => {
@@ -669,9 +727,20 @@ export default function App() {
           </>
         )}
 
-        {/* User-Facing Clean Footer (Zero admin links) */}
-        <footer className="pt-8 pb-4 text-center text-[10px] text-slate-400">
+        {/* Clean Footer with Admin Portal Access (Strictly restricted to mustetm7@gmail.com) */}
+        <footer className="pt-8 pb-4 text-center text-[10px] text-slate-400 space-y-1.5">
           <p>MotoCare PH • Motorcycle Maintenance & Digital Garage</p>
+          {isExactAdmin && (
+            <div>
+              <button
+                type="button"
+                onClick={handleOpenAdminPortal}
+                className="text-slate-400 hover:text-[#FF6B00] transition-colors underline cursor-pointer"
+              >
+                Owner Admin Portal
+              </button>
+            </div>
+          )}
         </footer>
       </main>
 
