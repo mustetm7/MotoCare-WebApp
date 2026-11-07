@@ -9,7 +9,6 @@
         "email": { "type": "string", "description": "The user's email address." },
         "displayName": { "type": "string", "description": "The user's display name." },
         "photoURL": { "type": "string", "description": "Avatar image URL." },
-        "phone": { "type": "string", "description": "Contact phone number." },
         "role": { "type": "string", "description": "Account role: rider or admin.", "enum": ["rider", "admin"] },
         "subscriptionTier": { "type": "string", "description": "free or pro", "enum": ["free", "pro"] },
         "subscriptionStatus": { "type": "string", "description": "active, trial, or free", "enum": ["active", "trial", "free"] },
@@ -18,6 +17,13 @@
         "referenceNumber": { "type": "string", "description": "Latest submitted reference code." },
         "amountPhp": { "type": "number", "description": "Amount paid in PHP." },
         "lastPaymentDate": { "type": "string", "description": "ISO timestamp of last payment." },
+        "subscriptionStartDate": { "type": "string", "description": "ISO timestamp of subscription activation." },
+        "expiryDate": { "type": "string", "description": "Firestore Timestamp (or ISO timestamp) of subscription expiration." },
+        "billingAnchorDay": { "type": "number", "description": "Philippine calendar day (1-31) of monthly billing anchor." },
+        "lastPaymentId": { "type": "string", "description": "Document ID of last approved payment submission." },
+        "bikeCount": { "type": "number", "description": "Server-enforced count of motorcycles registered to user's garage." },
+        "lastBikeId": { "type": "string", "description": "Document ID of the last motorcycle created or deleted." },
+        "lastBikeAction": { "type": "string", "description": "create or delete", "enum": ["create", "delete"] },
         "approvedAt": { "type": "string", "description": "ISO timestamp of admin approval." },
         "approvedBy": { "type": "string", "description": "Admin identifier who approved PRO access." },
         "createdAt": { "type": "string", "description": "Creation timestamp." },
@@ -107,19 +113,23 @@
         "userId": { "type": "string", "description": "Rider user ID." },
         "userEmail": { "type": "string", "description": "Rider email." },
         "userName": { "type": "string", "description": "Rider full name." },
-        "userPhone": { "type": "string", "description": "Rider phone number." },
         "bikeModel": { "type": "string", "description": "Rider's motorcycle model." },
         "bikePlate": { "type": "string", "description": "Motorcycle license plate." },
-        "paymentMethod": { "type": "string", "description": "gcash, gotyme, etc." },
+        "paymentMethod": { "type": "string", "description": "gcash or gotyme" },
         "referenceNumber": { "type": "string", "description": "Payment reference code." },
+        "referenceHash": { "type": "string", "description": "Deterministic SHA-256 hash of provider and reference." },
         "amountPhp": { "type": "number", "description": "Amount paid (49)." },
         "status": { "type": "string", "description": "pending_approval, active_pro, or rejected", "enum": ["pending_approval", "active_pro", "rejected"] },
         "submittedAt": { "type": "string", "description": "Timestamp when submitted." },
         "reviewedAt": { "type": "string", "description": "Timestamp when reviewed." },
         "reviewedBy": { "type": "string", "description": "Admin who reviewed." },
+        "approvedAt": { "type": "string", "description": "ISO timestamp when approved." },
+        "approvedBy": { "type": "string", "description": "Admin who approved the payment." },
+        "subscriptionStartDate": { "type": "string", "description": "Subscription start ISO timestamp." },
+        "subscriptionEndDate": { "type": "string", "description": "Subscription end/expiry ISO timestamp." },
         "notes": { "type": "string", "description": "Review or rider notes." }
       },
-      "required": ["id", "userId", "userEmail", "paymentMethod", "referenceNumber", "status"]
+      "required": ["id", "userId", "userEmail", "paymentMethod", "referenceNumber", "referenceHash", "status"]
     },
     "AdminDoc": {
       "title": "AdminDoc",
@@ -131,6 +141,17 @@
         "createdAt": { "type": "string", "description": "Creation timestamp." }
       },
       "required": ["email", "role"]
+    },
+    "PaymentReference": {
+      "title": "PaymentReference",
+      "description": "Deterministic non-personal SHA-256 reservation to prevent duplicate payment submissions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Deterministic SHA-256 hash of provider and normalized reference." },
+        "status": { "type": "string", "description": "Reservation status (reserved).", "enum": ["reserved"] },
+        "createdAt": { "type": "string", "description": "Creation timestamp." }
+      },
+      "required": ["id", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -153,6 +174,10 @@
     "/paymentSubmissions/{submissionId}": {
       "schema": { "$ref": "PaymentSubmission" },
       "description": "Submitted payment references for admin approval."
+    },
+    "/paymentReferences/{refHash}": {
+      "schema": { "$ref": "PaymentReference" },
+      "description": "Non-personal SHA-256 reservation for duplicate prevention."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "AdminDoc" },

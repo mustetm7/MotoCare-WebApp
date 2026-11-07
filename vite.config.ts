@@ -86,12 +86,13 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {
-      hmr: process.env.DISABLE_HMR !== 'true',
+      hmr: process.env.DISABLE_HMR !== 'true' ? { overlay: false } : false,
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      forwardConsole: false,
     },
   };
 });

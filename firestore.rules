@@ -16,20 +16,77 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    // Hardened Admin Verification:
+    // Requires authenticated user, verified email address, and matching admin doc or authorized owner email.
     function isAdmin() {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (request.auth.token.email != null && request.auth.token.email == 'mustetm7@gmail.com')
-      );
+      return isSignedIn() &&
+        request.auth.token.email_verified == true && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+          (request.auth.token.email != null && request.auth.token.email == 'mustetm7@gmail.com')
+        );
+    }
+
+    // Helper to evaluate server-authoritative Pro entitlement:
+    // Requires subscriptionTier == 'pro' and non-expired native Firestore Timestamp compared against server timestamp request.time.
+    function isUserPro(userId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      return userDoc.data.subscriptionTier == 'pro' &&
+        ('expiryDate' in userDoc.data) &&
+        userDoc.data.expiryDate is timestamp &&
+        userDoc.data.expiryDate > request.time;
     }
 
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Helper to validate user profile creation:
+    // Strictly enforces matching Auth UID & email, default rider role, default free tier, 0 bikeCount, and forbids privileged or phone fields.
+    function isValidUserCreate(data, userId) {
+      return request.auth.uid == userId &&
+        data.id == userId &&
+        (!('uid' in data) || data.uid == userId) &&
+        data.email == request.auth.token.email &&
+        data.role == 'rider' &&
+        data.subscriptionTier == 'free' &&
+        (!('subscriptionStatus' in data) || data.subscriptionStatus == 'free') &&
+        (!('paymentStatus' in data) || data.paymentStatus == 'unpaid_free') &&
+        (!('bikeCount' in data) || data.bikeCount == 0) &&
+        (!('approvedAt' in data) || data.approvedAt == null) &&
+        (!('approvedBy' in data) || data.approvedBy == null) &&
+        data.keys().hasOnly(['id', 'uid', 'email', 'displayName', 'photoURL', 'role', 'subscriptionTier', 'subscriptionStatus', 'paymentStatus', 'bikeCount', 'createdAt', 'updatedAt']);
+    }
+
+    // Helper to validate non-personal payment reference reservation:
+    // Contains ONLY hash ID, status, and timestamp. Never exposes personal or payment details.
+    function isValidReservation(data, refHash) {
+      return data.keys().hasOnly(['id', 'status', 'createdAt']) &&
+        data.id == refHash &&
+        data.status == 'reserved' &&
+        data.createdAt is string;
+    }
+
+    // Helper to validate payment submission creation:
+    function isValidPaymentSubmissionCreate(data) {
+      return data.userId == request.auth.uid &&
+        data.userEmail == request.auth.token.email &&
+        data.paymentMethod in ['gcash', 'gotyme'] &&
+        data.amountPhp == 49 &&
+        data.status == 'pending_approval' &&
+        data.referenceNumber is string &&
+        data.referenceNumber.size() > 0 &&
+        data.referenceNumber.size() <= 64 &&
+        data.referenceHash is string &&
+        data.referenceHash.size() == 64 &&
+        data.referenceHash.matches('^[a-f0-9]{64}$') &&
+        (!('reviewedAt' in data) || data.reviewedAt == null) &&
+        (!('reviewedBy' in data) || data.reviewedBy == null);
+    }
+
     // 1. Admins Collection
+    // Ordinary users can never create, modify, delete, or grant admin permissions.
     match /admins/{adminId} {
-      allow read: if isSignedIn();
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == adminId);
       allow write: if isAdmin();
     }
 
@@ -37,25 +94,138 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
-      allow create: if isOwner(userId) && request.resource.data.id == userId;
+      allow create: if (isOwner(userId) && isValidUserCreate(request.resource.data, userId)) || isAdmin();
       allow update: if (
         isOwner(userId) &&
         request.resource.data.id == userId &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'subscriptionTier', 'paymentStatus'])
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.subscriptionTier == resource.data.subscriptionTier &&
+        // Forbid direct modification of privileged role and subscription fields
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'role', 'subscriptionTier', 'subscriptionStatus', 'paymentStatus', 'approvedAt', 'approvedBy',
+          'email', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay', 'lastPaymentId'
+        ]) &&
+        // Securely guard bikeCount: Riders cannot arbitrarily modify or forge bikeCount.
+        // It can only change in lockstep with consistent motorcycle creation or deletion.
+        (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['bikeCount', 'lastBikeId', 'lastBikeAction']) ||
+          (
+            request.resource.data.lastBikeAction == 'create' &&
+            request.resource.data.bikeCount == (('bikeCount' in resource.data) ? resource.data.bikeCount + 1 : 1) &&
+            request.resource.data.lastBikeId is string &&
+            existsAfter(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)) &&
+            getAfter(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId)).data.userId == userId
+          ) ||
+          (
+            request.resource.data.lastBikeAction == 'delete' &&
+            request.resource.data.bikeCount == (('bikeCount' in resource.data && resource.data.bikeCount > 0) ? resource.data.bikeCount - 1 : 0) &&
+            request.resource.data.lastBikeId is string &&
+            !existsAfter(/databases/$(database)/documents/motorcycles/$(request.resource.data.lastBikeId))
+          )
+        )
       ) || isAdmin();
       allow delete: if isAdmin();
     }
 
-    // 3. Motorcycles Collection
+    // 3. Unique Payment References Reservation (Deterministic SHA-256 Non-Personal Reservation)
+    match /paymentReferences/{refHash} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create: if isSignedIn() && isValidReservation(request.resource.data, refHash);
+      allow update, delete: if isAdmin();
+    }
+
+    // 4. Payment Submissions Collection
+    match /paymentSubmissions/{submissionId} {
+      allow get: if isOwner(resource.data.userId) || isAdmin();
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() &&
+        isValidPaymentSubmissionCreate(request.resource.data) &&
+        existsAfter(/databases/$(database)/documents/paymentReferences/$(request.resource.data.referenceHash));
+      allow update: if isAdmin() &&
+        resource.data.status == 'pending_approval' &&
+        request.resource.data.status in ['active_pro', 'rejected'] &&
+        (
+          request.resource.data.status == 'rejected' ||
+          (
+            request.resource.data.status == 'active_pro' &&
+            getAfter(/databases/$(database)/documents/users/$(resource.data.userId)).data.lastPaymentId == submissionId &&
+            getAfter(/databases/$(database)/documents/users/$(resource.data.userId)).data.subscriptionTier == 'pro'
+          )
+        ) &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.userEmail == resource.data.userEmail &&
+        request.resource.data.paymentMethod == resource.data.paymentMethod &&
+        request.resource.data.referenceNumber == resource.data.referenceNumber &&
+        request.resource.data.referenceHash == resource.data.referenceHash &&
+        request.resource.data.amountPhp == resource.data.amountPhp &&
+        request.resource.data.submittedAt == resource.data.submittedAt;
+      allow delete: if isAdmin();
+    }
+
+    // 5. Motorcycles Collection (Enforced Quota: Free max 1 bike, Pro unlimited)
     match /motorcycles/{bikeId} {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if (isOwner(resource.data.userId) && request.resource.data.userId == resource.data.userId) || isAdmin();
-      allow delete: if isOwner(resource.data.userId) || isAdmin();
+      
+      // CREATE: Requires authenticated owner, consistent bikeCount increment in user doc,
+      // and quota enforcement (either user is active Pro, or bikeCount before write is < 1).
+      allow create: if (
+        isSignedIn() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.id == bikeId &&
+        isValidId(bikeId) &&
+        (
+          isAdmin() ||
+          (
+            existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastBikeId == bikeId &&
+            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastBikeAction == 'create' &&
+            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.bikeCount == (
+              ('bikeCount' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+                ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.bikeCount + 1
+                : 1
+            ) &&
+            (
+              isUserPro(request.auth.uid) ||
+              (
+                ('bikeCount' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+                  ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.bikeCount < 1
+                  : true
+              )
+            )
+          )
+        )
+      );
+
+      // UPDATE: Owner can update their existing motorcycle specs/odometer without changing ownership or bike ID.
+      allow update: if (
+        isOwner(resource.data.userId) &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.id == resource.data.id
+      ) || isAdmin();
+
+      // DELETE: Owner can delete their bike; must atomically decrement bikeCount in user doc.
+      allow delete: if (
+        isOwner(resource.data.userId) &&
+        (
+          isAdmin() ||
+          (
+            existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastBikeId == bikeId &&
+            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastBikeAction == 'delete' &&
+            getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.bikeCount == (
+              ('bikeCount' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data &&
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.bikeCount > 0)
+                ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.bikeCount - 1
+                : 0
+            )
+          )
+        )
+      ) || isAdmin();
     }
 
-    // 4. Maintenance Reminders Collection
+    // 6. Maintenance Reminders Collection
     match /reminders/{reminderId} {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
@@ -64,21 +234,13 @@ service cloud.firestore {
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
 
-    // 5. Service Records Collection
+    // 7. Service Records Collection
     match /serviceRecords/{recordId} {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if (isOwner(resource.data.userId) && request.resource.data.userId == resource.data.userId) || isAdmin();
       allow delete: if isOwner(resource.data.userId) || isAdmin();
-    }
-
-    // 6. Payment Submissions Collection
-    match /paymentSubmissions/{submissionId} {
-      allow get: if isOwner(resource.data.userId) || isAdmin();
-      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
     }
   }
 }

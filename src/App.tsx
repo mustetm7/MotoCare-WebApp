@@ -53,7 +53,7 @@ import { Plus } from 'lucide-react';
 import { generateOemSchedule, PhilippineModelPreset } from './data/philippinePresets';
 import { INITIAL_MOTORCYCLES, INITIAL_REMINDERS } from './data/initialData';
 import { useAuth } from './context/AuthContext';
-import { saveMotorcycleToFirestore } from './utils/firestoreService';
+import { saveMotorcycleToFirestore, deleteMotorcycleFromFirestore } from './utils/firestoreService';
 
 export default function App() {
   const { user, subscription, setSubscription, submitPaymentRef } = useAuth();
@@ -198,8 +198,25 @@ export default function App() {
     sounds.playSuccess();
   };
 
-  const handleSaveBike = (bike: Motorcycle, selectedPreset?: PhilippineModelPreset) => {
+  const handleSaveBike = async (bike: Motorcycle, selectedPreset?: PhilippineModelPreset) => {
     const exists = motorcycles.some((b) => b.id === bike.id);
+    if (!exists && subscription.tier === 'free' && motorcycles.length >= 1) {
+      setIsPaywallOpen(true);
+      return;
+    }
+
+    if (user) {
+      try {
+        await saveMotorcycleToFirestore(bike, user.uid);
+      } catch (err: any) {
+        if (err?.message?.includes('QUOTA_EXCEEDED') || err?.message?.includes('PERMISSION_DENIED')) {
+          setIsPaywallOpen(true);
+          return;
+        }
+        console.error('Failed to sync motorcycle to Firestore:', err);
+      }
+    }
+
     if (exists) {
       setMotorcycles(motorcycles.map((b) => (b.id === bike.id ? bike : b)));
     } else {
@@ -214,8 +231,15 @@ export default function App() {
     }
   };
 
-  const handleDeleteBike = (bikeId: string) => {
+  const handleDeleteBike = async (bikeId: string) => {
     sounds.playClick();
+    if (user) {
+      try {
+        await deleteMotorcycleFromFirestore(bikeId, user.uid);
+      } catch (err) {
+        console.error('Failed to delete motorcycle from Firestore:', err);
+      }
+    }
     const remaining = motorcycles.filter((b) => b.id !== bikeId);
     setMotorcycles(remaining);
     setActiveBikeId(remaining.length > 0 ? remaining[0].id : '');
@@ -397,6 +421,7 @@ export default function App() {
       );
     } catch (err) {
       console.warn('Could not submit payment to Firestore:', err);
+      throw err;
     }
 
     // 2. Update local state

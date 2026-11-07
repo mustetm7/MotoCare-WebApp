@@ -117,31 +117,46 @@ export type PaymentMethod = 'gcash' | 'gotyme' | 'maribank' | 'maya' | 'card';
 export interface UserSubscription {
   tier: UserSubscriptionTier;
   plan: 'monthly' | 'annual' | null;
-  status: 'active' | 'trial' | 'free';
+  status: 'active' | 'trial' | 'free' | 'expired' | 'revoked';
   trialEndDate?: string;
   paymentMethod?: PaymentMethod;
   gcashNumber?: string;
   referenceNumber?: string;
-  expiryDate?: string;
+  subscriptionStartDate?: string;
+  expiryDate?: string; // ISO 8601 string in UI state (stored as native Firestore Timestamp)
+  billingAnchorDay?: number;
+  lastPaymentId?: string;
+  daysRemaining?: number;
+  isExpired?: boolean;
 }
 
 export type AccountPaymentStatus = 'pending_approval' | 'active_pro' | 'unpaid_free' | 'rejected';
+export type DashboardSubscriptionStatus = 'FREE' | 'ACTIVE' | 'PENDING RENEWAL' | 'EXPIRED' | 'REJECTED';
 
 export interface UserAccount {
   id: string;
   name: string;
   email: string;
-  phone?: string;
   registeredAt: string;
   bikeModel: string;
   bikeNickname?: string;
   bikePlate?: string;
+  bikeCount?: number;
+  lastBikeId?: string;
+  lastBikeAction?: 'create' | 'delete';
   subscriptionTier: UserSubscriptionTier;
   paymentStatus: AccountPaymentStatus;
   paymentMethod?: PaymentMethod;
   referenceNumber?: string;
   amountPhp?: number;
   lastPaymentDate?: string;
+  subscriptionStartDate?: string;
+  expiryDate?: string;
+  billingAnchorDay?: number;
+  lastPaymentId?: string;
+  daysRemaining?: number;
+  effectiveStatus?: DashboardSubscriptionStatus;
+  hasPendingRenewal?: boolean;
   approvedAt?: string;
   approvedBy?: string;
   notes?: string;
