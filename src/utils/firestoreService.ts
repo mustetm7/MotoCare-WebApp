@@ -100,7 +100,9 @@ export async function computePaymentRefHash(provider: string, normalizedRef: str
 }
 
 // 1. User Profile & Subscription Sync
-export async function syncUserProfile(user: User): Promise<void> {
+let pendingProfileSyncRetry = false;
+
+export async function syncUserProfile(user: User, isRetry = false): Promise<void> {
   const path = `users/${user.uid}`;
   try {
     const userDocRef = doc(db, 'users', user.uid);
@@ -141,6 +143,34 @@ export async function syncUserProfile(user: User): Promise<void> {
       });
     }
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const isTransientOffline =
+      errMsg.toLowerCase().includes('offline') ||
+      errMsg.toLowerCase().includes('unavailable');
+
+    if (isTransientOffline) {
+      console.warn(
+        'MotoCare: Client is temporarily offline during user profile sync; will retry when online.'
+      );
+      if (!isRetry && !pendingProfileSyncRetry && typeof window !== 'undefined') {
+        pendingProfileSyncRetry = true;
+        const retrySync = () => {
+          window.removeEventListener('online', retrySync);
+          pendingProfileSyncRetry = false;
+          if (auth.currentUser && auth.currentUser.uid === user.uid) {
+            void syncUserProfile(auth.currentUser, true);
+          }
+        };
+        window.addEventListener('online', retrySync);
+        setTimeout(() => {
+          if (pendingProfileSyncRetry && (typeof navigator === 'undefined' || navigator.onLine)) {
+            retrySync();
+          }
+        }, 3500);
+      }
+      return;
+    }
+
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
@@ -291,7 +321,11 @@ export function subscribeToAllPaymentSubmissions(
       callback(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch {
+        // Prevent uncaught listener throw in offline mode
+      }
     }
   );
 }

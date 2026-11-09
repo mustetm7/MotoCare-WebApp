@@ -433,7 +433,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
 
               {/* Motorcycle Nickname explicitly anchored directly below the UPGRADE / PRO button on mobile */}
-              {activeBike && (
+              {activeBike && activeBike.id && (
                 <button
                   type="button"
                   onClick={() => setBikeMenuOpen(!bikeMenuOpen)}
@@ -507,23 +507,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             {/* Desktop-only Garage Switcher Pill */}
-            <div className="hidden sm:block">
-              <button
-                type="button"
-                onClick={() => setBikeMenuOpen(!bikeMenuOpen)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium border border-slate-200"
-                title="Switch Motorcycle"
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: activeBike?.customColorBadge || '#00C5FF' }}
-                />
-                <span className="max-w-[110px] truncate font-bold text-slate-800">
-                  {activeBike?.nickname ? `'${activeBike.nickname}'` : activeBike?.model || 'My Bike'}
-                </span>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-              </button>
-            </div>
+            {motorcycles.length > 0 && (
+              <div className="hidden sm:block">
+                <button
+                  type="button"
+                  onClick={() => setBikeMenuOpen(!bikeMenuOpen)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium border border-slate-200"
+                  title="Switch Motorcycle"
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: activeBike?.customColorBadge || '#00C5FF' }}
+                  />
+                  <span className="max-w-[110px] truncate font-bold text-slate-800">
+                    {activeBike?.nickname ? `'${activeBike.nickname}'` : activeBike?.model || 'My Bike'}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

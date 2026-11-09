@@ -4,10 +4,14 @@ import React from 'react';
 import App from '../src/App';
 import * as AuthContextModule from '../src/context/AuthContext';
 
-vi.mock('../src/context/AuthContext', () => ({
-  useAuth: vi.fn(),
-  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
-}));
+vi.mock('../src/context/AuthContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/context/AuthContext')>();
+  return {
+    ...actual,
+    useAuth: vi.fn(),
+    AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+  };
+});
 
 describe('MotoCare Admin Portal Footer Visibility (Vitest & React Testing Library)', () => {
   beforeEach(() => {

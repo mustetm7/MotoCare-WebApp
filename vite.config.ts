@@ -46,8 +46,12 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
           maximumFileSizeToCacheInBytes: 5242880,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globIgnores: ['**/assets/aistudio/**'],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -84,6 +88,38 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      chunkSizeWarningLimit: 2000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('@firebase/firestore') || id.includes('firebase/firestore')) {
+                return 'vendor-firebase-firestore';
+              }
+              if (id.includes('@firebase/auth') || id.includes('firebase/auth')) {
+                return 'vendor-firebase-auth';
+              }
+              if (id.includes('firebase') || id.includes('@firebase')) {
+                return 'vendor-firebase-core';
+              }
+              if (id.includes('lucide-react')) {
+                return 'vendor-icons';
+              }
+              if (id.includes('react-dom') || id.includes('react') || id.includes('scheduler')) {
+                return 'vendor-react';
+              }
+            }
+            if (id.includes('src/utils/firestoreService')) {
+              return 'firestore-service';
+            }
+            if (id.includes('src/components/AdminUsersPortal')) {
+              return 'admin-portal';
+            }
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),

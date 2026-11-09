@@ -54,19 +54,33 @@ import { MaintenanceCard } from './components/MaintenanceCard';
 import { ServiceLogbookView } from './components/ServiceLogbookView';
 import { LtoView } from './components/LtoView';
 import { OnboardingView } from './components/OnboardingView';
-import { GpsRideTrackerSheet } from './components/GpsRideTrackerSheet';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OverdueAlertBanner } from './components/OverdueAlertBanner';
 import { triggerOverdueAlert } from './utils/notifications';
 import { AdminUsersPortal } from './components/AdminUsersPortal';
 
-// Modals
-import { QuickAddOdometerModal } from './components/QuickAddOdometerModal';
-import { GarageModal } from './components/GarageModal';
-import { AddReminderModal } from './components/AddReminderModal';
-import { AddServiceRecordModal } from './components/AddServiceRecordModal';
-import { PaywallModal } from './components/PaywallModal';
-import { LegacyMigrationModal } from './components/LegacyMigrationModal';
+// Lazy-loaded modals for optimal bundle splitting
+const GpsRideTrackerSheet = React.lazy(() =>
+  import('./components/GpsRideTrackerSheet').then((m) => ({ default: m.GpsRideTrackerSheet }))
+);
+const QuickAddOdometerModal = React.lazy(() =>
+  import('./components/QuickAddOdometerModal').then((m) => ({ default: m.QuickAddOdometerModal }))
+);
+const GarageModal = React.lazy(() =>
+  import('./components/GarageModal').then((m) => ({ default: m.GarageModal }))
+);
+const AddReminderModal = React.lazy(() =>
+  import('./components/AddReminderModal').then((m) => ({ default: m.AddReminderModal }))
+);
+const AddServiceRecordModal = React.lazy(() =>
+  import('./components/AddServiceRecordModal').then((m) => ({ default: m.AddServiceRecordModal }))
+);
+const PaywallModal = React.lazy(() =>
+  import('./components/PaywallModal').then((m) => ({ default: m.PaywallModal }))
+);
+const LegacyMigrationModal = React.lazy(() =>
+  import('./components/LegacyMigrationModal').then((m) => ({ default: m.LegacyMigrationModal }))
+);
 
 import { Plus } from 'lucide-react';
 import { generateOemSchedule, PhilippineModelPreset } from './data/philippinePresets';
@@ -533,15 +547,11 @@ export default function App() {
   const isPro = hasProAccess;
 
   // --- Persistent State ---
-  // When signed in, initialize from UID-scoped cache; when unauthenticated (guest), use unscoped storage.
-  // Never automatically assign unscoped legacy data to a signed-in user without confirmation.
   const [motorcycles, setMotorcycles] = React.useState<Motorcycle[]>(() =>
     user?.uid ? loadUserScopedMotorcycles(user.uid) : loadMotorcycles()
   );
   const [activeBikeId, setActiveBikeId] = React.useState<string>(() =>
-    user?.uid
-      ? loadUserScopedActiveBikeId(user.uid, motorcycles)
-      : loadActiveBikeId(motorcycles)
+    user?.uid ? loadUserScopedActiveBikeId(user.uid, motorcycles) : loadActiveBikeId(motorcycles)
   );
   const [reminders, setReminders] = React.useState<MaintenanceReminder[]>(() =>
     user?.uid ? loadUserScopedReminders(user.uid) : loadReminders()
@@ -630,13 +640,13 @@ export default function App() {
     };
   }, []);
 
-  // Sync to read-through LocalStorage cache ONLY after hydration matches the active session state
+  // Sync to read-through UID-scoped LocalStorage cache when authenticated, or local guest storage when unauthenticated
   React.useEffect(() => {
     if (user?.uid) {
       if (hydratedUid === user.uid) {
         saveUserScopedMotorcycles(user.uid, motorcycles);
       }
-    } else if (hydratedUid === null) {
+    } else {
       saveMotorcycles(motorcycles);
     }
   }, [motorcycles, user?.uid, hydratedUid]);
@@ -646,7 +656,7 @@ export default function App() {
       if (hydratedUid === user.uid) {
         saveUserScopedReminders(user.uid, reminders);
       }
-    } else if (hydratedUid === null) {
+    } else {
       saveReminders(reminders);
     }
   }, [reminders, user?.uid, hydratedUid]);
@@ -656,7 +666,7 @@ export default function App() {
       if (hydratedUid === user.uid) {
         saveUserScopedServiceRecords(user.uid, serviceRecords);
       }
-    } else if (hydratedUid === null) {
+    } else {
       saveServiceRecords(serviceRecords);
     }
   }, [serviceRecords, user?.uid, hydratedUid]);
@@ -675,7 +685,7 @@ export default function App() {
         if (hydratedUid === user.uid) {
           saveUserScopedActiveBikeId(user.uid, activeBikeId);
         }
-      } else if (hydratedUid === null) {
+      } else {
         saveActiveBikeId(activeBikeId);
       }
     }
@@ -1476,89 +1486,103 @@ export default function App() {
         </footer>
       </main>
 
-      {/* Modals */}
-      <QuickAddOdometerModal
-        isOpen={isQuickAddOdoOpen}
-        onClose={() => setIsQuickAddOdoOpen(false)}
-        bike={activeBike}
-        presets={quickPresets}
-        onSavePresets={setQuickPresets}
-        onUpdateOdometer={handleUpdateOdometer}
-      />
-
-      <GarageModal
-        isOpen={isGarageModalOpen}
-        onClose={() => setIsGarageModalOpen(false)}
-        bike={editingBike}
-        subscription={subscription}
-        hasProAccess={hasProAccess}
-        existingCount={motorcycles.length}
-        onSave={handleSaveBike}
-        onDelete={handleDeleteBike}
-        canDelete={true}
-        onOpenPaywall={() => {
-          setIsGarageModalOpen(false);
-          setIsPaywallOpen(true);
-        }}
-      />
-
-      <AddReminderModal
-        isOpen={isReminderModalOpen}
-        onClose={() => setIsReminderModalOpen(false)}
-        bike={activeBike}
-        editingReminder={editingReminder}
-        onSave={handleSaveReminder}
-        onDelete={handleDeleteReminder}
-      />
-
-      <AddServiceRecordModal
-        isOpen={isServiceModalOpen}
-        onClose={() => setIsServiceModalOpen(false)}
-        bike={activeBike}
-        reminders={reminders}
-        initialTitle={serviceModalInitialTitle}
-        initialReminderId={serviceModalInitialReminderId}
-        onSave={handleSaveServiceRecord}
-      />
-
-      <PaywallModal
-        isOpen={isPaywallOpen}
-        onClose={() => setIsPaywallOpen(false)}
-        subscription={subscription}
-        onSubmitReference={handleSubmitReference}
-        onCancelSubscription={handleCancelSubscription}
-        isAlreadyPending={isAlreadyPending}
-        existingPendingRef={existingPendingRef}
-      />
-
-      {/* Safe Local Data Migration Preview & Conflict Resolution Modal */}
-      <LegacyMigrationModal
-        isOpen={isMigrationModalOpen || (isConflictModalOpen && activeConflicts.length > 0)}
-        dryRun={isMigrationModalOpen ? migrationDryRun : null}
-        activeConflicts={activeConflicts}
-        isSyncing={isMigrating || syncStatus === 'syncing'}
-        onConfirmMigrate={handleConfirmLegacyMigration}
-        onSkipMigration={handleSkipLegacyMigration}
-        onResolveConflict={handleResolveConflict}
-        onClose={() => setIsConflictModalOpen(false)}
-      />
-
-      {/* GPS Ride Tracker Modal */}
-      {isGpsModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <GpsRideTrackerSheet
+      {/* Lazy-Loaded Modals */}
+      <React.Suspense fallback={null}>
+        {isQuickAddOdoOpen && (
+          <QuickAddOdometerModal
+            isOpen={isQuickAddOdoOpen}
+            onClose={() => setIsQuickAddOdoOpen(false)}
             bike={activeBike}
+            presets={quickPresets}
+            onSavePresets={setQuickPresets}
+            onUpdateOdometer={handleUpdateOdometer}
+          />
+        )}
+
+        {isGarageModalOpen && (
+          <GarageModal
+            isOpen={isGarageModalOpen}
+            onClose={() => setIsGarageModalOpen(false)}
+            bike={editingBike}
             subscription={subscription}
             hasProAccess={hasProAccess}
-            onFinishRide={handleFinishGpsRide}
-            onClose={() => setIsGpsModalOpen(false)}
+            existingCount={motorcycles.length}
+            onSave={handleSaveBike}
+            onDelete={handleDeleteBike}
+            canDelete={true}
             onOpenPaywall={() => {
-              setIsGpsModalOpen(false);
+              setIsGarageModalOpen(false);
               setIsPaywallOpen(true);
             }}
           />
-        </div>
-      )}
+        )}
+
+        {isReminderModalOpen && (
+          <AddReminderModal
+            isOpen={isReminderModalOpen}
+            onClose={() => setIsReminderModalOpen(false)}
+            bike={activeBike}
+            editingReminder={editingReminder}
+            onSave={handleSaveReminder}
+            onDelete={handleDeleteReminder}
+          />
+        )}
+
+        {isServiceModalOpen && (
+          <AddServiceRecordModal
+            isOpen={isServiceModalOpen}
+            onClose={() => setIsServiceModalOpen(false)}
+            bike={activeBike}
+            reminders={reminders}
+            initialTitle={serviceModalInitialTitle}
+            initialReminderId={serviceModalInitialReminderId}
+            onSave={handleSaveServiceRecord}
+          />
+        )}
+
+        {isPaywallOpen && (
+          <PaywallModal
+            isOpen={isPaywallOpen}
+            onClose={() => setIsPaywallOpen(false)}
+            subscription={subscription}
+            onSubmitReference={handleSubmitReference}
+            onCancelSubscription={handleCancelSubscription}
+            isAlreadyPending={isAlreadyPending}
+            existingPendingRef={existingPendingRef}
+          />
+        )}
+
+        {/* Safe Local Data Migration Preview & Conflict Resolution Modal */}
+        {(isMigrationModalOpen || (isConflictModalOpen && activeConflicts.length > 0)) && (
+          <LegacyMigrationModal
+            isOpen={isMigrationModalOpen || (isConflictModalOpen && activeConflicts.length > 0)}
+            dryRun={isMigrationModalOpen ? migrationDryRun : null}
+            activeConflicts={activeConflicts}
+            isSyncing={isMigrating || syncStatus === 'syncing'}
+            onConfirmMigrate={handleConfirmLegacyMigration}
+            onSkipMigration={handleSkipLegacyMigration}
+            onResolveConflict={handleResolveConflict}
+            onClose={() => setIsConflictModalOpen(false)}
+          />
+        )}
+
+        {/* GPS Ride Tracker Modal */}
+        {isGpsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <GpsRideTrackerSheet
+              bike={activeBike}
+              subscription={subscription}
+              hasProAccess={hasProAccess}
+              onFinishRide={handleFinishGpsRide}
+              onClose={() => setIsGpsModalOpen(false)}
+              onOpenPaywall={() => {
+                setIsGpsModalOpen(false);
+                setIsPaywallOpen(true);
+              }}
+            />
+          </div>
+        )}
+      </React.Suspense>
 
       {/* Offline Connectivity Toast for PWA */}
       <OfflineIndicator />

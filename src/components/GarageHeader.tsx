@@ -52,7 +52,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
   return (
     <div className="space-y-5">
       {/* Active Bike Profile Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <span
@@ -75,16 +75,14 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           )}
         </div>
 
-        {/* Transmission / Bike Type Pill */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenEditBike}
-            className="px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-100 text-[#0097A7] text-[11px] font-bold tracking-wide uppercase shadow-sm hover:bg-cyan-100 transition-colors"
-          >
-            {bike.motorcycleType || bike.specs?.transmission || 'SCOOTER / AT'}
-          </button>
-        </div>
+        {/* Transmission / Bike Type Badge */}
+        <button
+          type="button"
+          onClick={onOpenEditBike}
+          className="px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-100 text-[#0097A7] text-[11px] font-bold tracking-wide uppercase shadow-sm hover:bg-cyan-100 transition-colors whitespace-nowrap shrink-0"
+        >
+          {bike.motorcycleType || bike.specs?.transmission || 'SCOOTER / AT'}
+        </button>
       </div>
 
       {/* Current Odometer Card */}

@@ -184,7 +184,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           await syncUserProfile(firebaseUser);
         } catch (err) {
-          console.error('Error syncing user profile:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('unavailable')) {
+            console.warn('User profile sync deferred (client offline):', msg);
+          } else {
+            console.error('Error syncing user profile:', err);
+          }
         }
       } else {
         setSubscription({ ...INITIAL_SUBSCRIPTION });
@@ -300,3 +305,6 @@ export function useAuth() {
   }
   return context;
 }
+
+
+

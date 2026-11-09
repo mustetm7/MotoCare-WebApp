@@ -15,6 +15,7 @@ import {
   loadSubscription,
   saveSubscription,
   pruneCachedSampleData,
+  saveUserScopedMotorcycles,
 } from '../src/utils/storage';
 import {
   calculateNextMonthlyExpiry,
@@ -400,7 +401,7 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
     expect(loadServiceRecords()).toEqual([]);
   });
 
-  it('Scenario 13: Quick Load Sample button is unavailable in OnboardingView', () => {
+  it('Scenario 13: Quick Load Sample button is unavailable in OnboardingView while Add Your Motorcycle works', () => {
     vi.mocked(AuthContextModule.useAuth).mockReturnValue({
       user: null,
       loading: false,
