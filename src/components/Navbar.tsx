@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActiveTab, Motorcycle, UserSubscription } from '../types';
+import { ActiveTab, Motorcycle, UserSubscription, CloudSyncStatus } from '../types';
 import { Bell, ChevronDown, Plus, Sparkles, Check, Vibrate, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -17,7 +17,11 @@ interface NavbarProps {
   motorcycles: Motorcycle[];
   activeBike: Motorcycle | null;
   subscription: UserSubscription;
-  onToggleDemoTier: () => void;
+  hasProAccess?: boolean;
+  syncStatus?: CloudSyncStatus;
+  onRetrySync?: () => void;
+  pendingConflictsCount?: number;
+  onOpenConflictReview?: () => void;
   onSelectBike: (bikeId: string) => void;
   onOpenAddBike: () => void;
   onOpenAddService: () => void;
@@ -36,7 +40,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   motorcycles,
   activeBike,
   subscription,
-  onToggleDemoTier,
+  hasProAccess: propHasProAccess,
+  syncStatus = 'synced',
+  onRetrySync,
+  pendingConflictsCount = 0,
+  onOpenConflictReview,
   onSelectBike,
   onOpenAddBike,
   onOpenAddService,
@@ -47,15 +55,22 @@ export const Navbar: React.FC<NavbarProps> = ({
   overdueReminders = [],
   onOpenServiceForReminder,
 }) => {
-  const { user, isAdmin, signIn, signOut } = useAuth();
-  const isExactAdmin = user?.email?.toLowerCase() === 'mustetm7@gmail.com';
+  const { user, hasProAccess: contextHasProAccess, signIn, signOut } = useAuth();
+  const isExactAdmin =
+    Boolean(user) &&
+    user?.email?.toLowerCase() === 'mustetm7@gmail.com' &&
+    user?.emailVerified === true;
   const [bikeMenuOpen, setBikeMenuOpen] = React.useState(false);
   const [bellOpen, setBellOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
   const bellContainerRef = React.useRef<HTMLDivElement>(null);
   const userContainerRef = React.useRef<HTMLDivElement>(null);
-  const isPro = subscription.tier === 'pro';
+  const isActivePaidPro =
+    subscription.tier === 'pro' &&
+    subscription.status === 'active' &&
+    !subscription.isExpired;
+  const isPro = propHasProAccess ?? contextHasProAccess ?? (isExactAdmin || isActivePaidPro);
 
   const [notifPerm, setNotifPerm] = React.useState<NotificationPermission>(() =>
     getNotificationPermission()
@@ -127,19 +142,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             {/* In-App PWA Install Button (Android & iOS) */}
             <PWAInstallButton variant="header" />
-
-            {/* Demo Toggle Switch (Evaluation helper) */}
-            <button
-              type="button"
-              onClick={onToggleDemoTier}
-              className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200 text-[9px] sm:text-[10px] font-medium text-slate-600 transition-all flex items-center gap-1 shrink-0"
-              title="Click to toggle between Free and Pro tiers"
-            >
-              <span className="hidden xs:inline text-slate-400">Tier:</span>
-              <span className={`font-bold ${isPro ? 'text-[#FF6B00]' : 'text-slate-600'}`}>
-                {isPro ? 'PRO' : 'FREE'}
-              </span>
-            </button>
 
             {/* Notification Bell */}
             <div className="relative shrink-0" ref={bellContainerRef}>
@@ -255,6 +257,59 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="relative flex flex-col items-end justify-center shrink-0 min-w-0" ref={dropdownRef}>
               {/* UPGRADE / PRO Button & Google User Avatar */}
               <div className="flex items-center gap-1 sm:gap-1.5">
+                {/* Cloud Sync Status Indicator (Synced, Syncing, Offline Cache, Sync Error) */}
+                {user && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (pendingConflictsCount > 0 && onOpenConflictReview) {
+                        onOpenConflictReview();
+                      } else if ((syncStatus === 'sync_error' || syncStatus === 'offline_cache') && onRetrySync) {
+                        onRetrySync();
+                      }
+                    }}
+                    className={`px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-lg text-[9px] sm:text-[10px] font-bold flex items-center gap-1 border transition-colors shrink-0 ${
+                      syncStatus === 'sync_error'
+                        ? 'bg-red-50 text-red-700 border-red-200 cursor-pointer'
+                        : syncStatus === 'offline_cache'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200 cursor-pointer'
+                        : syncStatus === 'syncing'
+                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    }`}
+                    title={
+                      syncStatus === 'sync_error'
+                        ? 'Sync Error - Click to retry queued cloud updates'
+                        : syncStatus === 'offline_cache'
+                        ? 'Offline Cache - Changes queued for sync when online'
+                        : syncStatus === 'syncing'
+                        ? 'Syncing changes to Firestore...'
+                        : 'Synced across devices'
+                    }
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        syncStatus === 'sync_error'
+                          ? 'bg-red-500'
+                          : syncStatus === 'offline_cache'
+                          ? 'bg-amber-500'
+                          : syncStatus === 'syncing'
+                          ? 'bg-blue-500 animate-ping'
+                          : 'bg-emerald-500'
+                      }`}
+                    />
+                    <span className="hidden xs:inline">
+                      {syncStatus === 'sync_error'
+                        ? 'Sync Error'
+                        : syncStatus === 'offline_cache'
+                        ? 'Offline Cache'
+                        : syncStatus === 'syncing'
+                        ? 'Syncing'
+                        : 'Synced'}
+                    </span>
+                  </button>
+                )}
+
                 {/* Visible Admin Portal button for verified owner */}
                 {isExactAdmin && onOpenAdminPortal && (
                   <button

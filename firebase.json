@@ -1,0 +1,19 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-motocarewebappmo-5f2a7f0c-1651-4e24-9a02-f13f968dd5d9",
+      "rules": "firestore.rules"
+    },
+    {
+      "database": "(default)",
+      "rules": "firestore.rules"
+    }
+  ],
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8080
+    },
+    "singleProjectMode": true
+  }
+}

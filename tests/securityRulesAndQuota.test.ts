@@ -82,6 +82,37 @@ function evalIsUserPro(
   return isTierPro && expiryMs !== null && expiryMs > requestTimeMs;
 }
 
+function evalIsValidCloudVersionCreate(data: Record<string, any>): boolean {
+  return (
+    'cloudVersion' in data &&
+    typeof data.cloudVersion === 'number' &&
+    Number.isInteger(data.cloudVersion) &&
+    data.cloudVersion === 1
+  );
+}
+
+function evalIsValidCloudVersionUpdate(
+  newData: Record<string, any>,
+  oldData: Record<string, any>
+): boolean {
+  if (
+    !('cloudVersion' in newData) ||
+    typeof newData.cloudVersion !== 'number' ||
+    !Number.isInteger(newData.cloudVersion)
+  ) {
+    return false;
+  }
+  if (!('cloudVersion' in oldData)) {
+    return newData.cloudVersion === 1;
+  }
+  return (
+    typeof oldData.cloudVersion === 'number' &&
+    Number.isInteger(oldData.cloudVersion) &&
+    oldData.cloudVersion >= 1 &&
+    newData.cloudVersion === oldData.cloudVersion + 1
+  );
+}
+
 // Evaluates `match /motorcycles/{bikeId}` allow create
 function evalAllowCreateMotorcycle(
   auth: MockAuth | null,
@@ -98,6 +129,7 @@ function evalAllowCreateMotorcycle(
   if (incomingData.userId !== auth!.uid) return false;
   if (incomingData.id !== motorcycleId) return false;
   if (typeof motorcycleId !== 'string' || motorcycleId.length === 0 || motorcycleId.length > 128) return false;
+  if (!evalIsValidCloudVersionCreate(incomingData)) return false;
 
   // Anti-Replay: Must NOT exist before transaction
   const existsBefore = motorcyclesBeforeDb.has(motorcycleId);
@@ -119,6 +151,85 @@ function evalAllowCreateMotorcycle(
   const quotaPermitted = isPro || underFreeLimit;
 
   return validAction && validBikeId && actualCountMatches && quotaPermitted;
+}
+
+function evalAllowUpdateMotorcycle(
+  auth: MockAuth | null,
+  motorcycleId: string,
+  oldData: Record<string, any>,
+  newData: Record<string, any>,
+  adminsDb: Set<string>
+): boolean {
+  if (!evalIsValidCloudVersionUpdate(newData, oldData)) return false;
+  if (evalIsAdmin(auth, adminsDb)) return true;
+  if (!evalIsOwner(auth, oldData.userId)) return false;
+  if (newData.id !== motorcycleId || newData.id !== oldData.id) return false;
+  if (newData.userId !== auth!.uid || newData.userId !== oldData.userId) return false;
+  return true;
+}
+
+function evalAllowCreateReminder(
+  auth: MockAuth | null,
+  reminderId: string,
+  incomingData: Record<string, any>,
+  motorcyclesDb: Map<string, MockDoc>
+): boolean {
+  if (!evalIsSignedIn(auth)) return false;
+  if (!evalIsValidCloudVersionCreate(incomingData)) return false;
+  if (incomingData.id !== reminderId || incomingData.userId !== auth!.uid) return false;
+  const parentBike = motorcyclesDb.get(incomingData.bikeId);
+  if (!parentBike || parentBike.data.userId !== auth!.uid) return false;
+  return true;
+}
+
+function evalAllowUpdateReminder(
+  auth: MockAuth | null,
+  reminderId: string,
+  oldData: Record<string, any>,
+  newData: Record<string, any>,
+  motorcyclesDb: Map<string, MockDoc>,
+  adminsDb: Set<string>
+): boolean {
+  if (!evalIsValidCloudVersionUpdate(newData, oldData)) return false;
+  if (evalIsAdmin(auth, adminsDb)) return true;
+  if (!evalIsOwner(auth, oldData.userId)) return false;
+  if (newData.id !== reminderId || newData.id !== oldData.id) return false;
+  if (newData.userId !== oldData.userId || newData.bikeId !== oldData.bikeId) return false;
+  const parentBike = motorcyclesDb.get(newData.bikeId);
+  if (!parentBike || parentBike.data.userId !== auth!.uid) return false;
+  return true;
+}
+
+function evalAllowCreateServiceRecord(
+  auth: MockAuth | null,
+  recordId: string,
+  incomingData: Record<string, any>,
+  motorcyclesDb: Map<string, MockDoc>
+): boolean {
+  if (!evalIsSignedIn(auth)) return false;
+  if (!evalIsValidCloudVersionCreate(incomingData)) return false;
+  if (incomingData.id !== recordId || incomingData.userId !== auth!.uid) return false;
+  const parentBike = motorcyclesDb.get(incomingData.bikeId);
+  if (parentBike && parentBike.data.userId !== auth!.uid) return false;
+  return true;
+}
+
+function evalAllowUpdateServiceRecord(
+  auth: MockAuth | null,
+  recordId: string,
+  oldData: Record<string, any>,
+  newData: Record<string, any>,
+  motorcyclesDb: Map<string, MockDoc>,
+  adminsDb: Set<string>
+): boolean {
+  if (!evalIsValidCloudVersionUpdate(newData, oldData)) return false;
+  if (evalIsAdmin(auth, adminsDb)) return true;
+  if (!evalIsOwner(auth, oldData.userId)) return false;
+  if (newData.id !== recordId || newData.id !== oldData.id) return false;
+  if (newData.userId !== oldData.userId || newData.bikeId !== oldData.bikeId) return false;
+  const parentBike = motorcyclesDb.get(newData.bikeId);
+  if (parentBike && parentBike.data.userId !== auth!.uid) return false;
+  return true;
 }
 
 // Evaluates `match /motorcycles/{bikeId}` allow delete
@@ -226,7 +337,7 @@ function evalAllowUpdateUser(
 }
 
 // =============================================================================
-// RUNNING THE 13 TARGETED VERIFICATION SCENARIOS
+// RUNNING THE 25 TARGETED VERIFICATION SCENARIOS
 // =============================================================================
 
 const adminsDb = new Set(['admin-super']);
@@ -239,13 +350,13 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
   const userAfter: MockDoc = { data: { id: 'rider-free', subscriptionTier: 'free', bikeCount: 1, lastBikeId: 'bike-101', lastBikeAction: 'create' } };
   const usersDb = new Map([['rider-free', userBefore]]);
   const motorcyclesBefore = new Map<string, MockDoc>();
-  const motorcyclesAfter = new Map([['bike-101', { data: { id: 'bike-101', userId: 'rider-free' } }]]);
+  const motorcyclesAfter = new Map([['bike-101', { data: { id: 'bike-101', userId: 'rider-free', cloudVersion: 1 } }]]);
 
   const userAllowed = evalAllowUpdateUser(auth, 'rider-free', userBefore.data, userAfter.data, adminsDb, motorcyclesBefore, motorcyclesAfter);
-  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-101', { id: 'bike-101', userId: 'rider-free' }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
+  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-101', { id: 'bike-101', userId: 'rider-free', cloudVersion: 1 }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
 
   assert(userAllowed && bikeAllowed, 'Free rider was blocked from creating first motorcycle');
-  console.log('✓ SCENARIO 1 PASS: Free user creates first motorcycle (0 -> 1 allowed).');
+  console.log('✓ SCENARIO 1 PASS: Free user creates first motorcycle (0 -> 1 allowed, cloudVersion: 1).');
 }
 
 // SCENARIO 2: Free user cannot create second motorcycle
@@ -254,9 +365,9 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
   const userBefore: MockDoc = { data: { id: 'rider-free', subscriptionTier: 'free', bikeCount: 1 } };
   const userAfter: MockDoc = { data: { id: 'rider-free', subscriptionTier: 'free', bikeCount: 2, lastBikeId: 'bike-102', lastBikeAction: 'create' } };
   const usersDb = new Map([['rider-free', userBefore]]);
-  const motorcyclesBefore = new Map([['bike-101', { data: { id: 'bike-101', userId: 'rider-free' } }]]);
+  const motorcyclesBefore = new Map([['bike-101', { data: { id: 'bike-101', userId: 'rider-free', cloudVersion: 1 } }]]);
 
-  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-102', { id: 'bike-102', userId: 'rider-free' }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
+  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-102', { id: 'bike-102', userId: 'rider-free', cloudVersion: 1 }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
 
   assert(!bikeAllowed, 'Free rider was improperly permitted to create a second bike');
   console.log('✓ SCENARIO 2 PASS: Free user cannot create second motorcycle (server quota enforced).');
@@ -270,10 +381,10 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
   const userAfter: MockDoc = { data: { id: 'rider-pro', subscriptionTier: 'pro', expiryDate: futureExpiry, bikeCount: 4, lastBikeId: 'bike-pro-4', lastBikeAction: 'create' } };
   const usersDb = new Map([['rider-pro', userBefore]]);
   const motorcyclesBefore = new Map<string, MockDoc>();
-  const motorcyclesAfter = new Map([['bike-pro-4', { data: { id: 'bike-pro-4', userId: 'rider-pro' } }]]);
+  const motorcyclesAfter = new Map([['bike-pro-4', { data: { id: 'bike-pro-4', userId: 'rider-pro', cloudVersion: 1 } }]]);
 
   const userAllowed = evalAllowUpdateUser(auth, 'rider-pro', userBefore.data, userAfter.data, adminsDb, motorcyclesBefore, motorcyclesAfter);
-  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-pro-4', { id: 'bike-pro-4', userId: 'rider-pro' }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
+  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-pro-4', { id: 'bike-pro-4', userId: 'rider-pro', cloudVersion: 1 }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
 
   assert(userAllowed && bikeAllowed, 'Active Pro rider was blocked from creating multiple motorcycles');
   console.log('✓ SCENARIO 3 PASS: Active Pro user creates multiple motorcycles (unlimited garage capacity).');
@@ -288,7 +399,7 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
   const usersDb = new Map([['rider-expired', userBefore]]);
   const motorcyclesBefore = new Map<string, MockDoc>();
 
-  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-exp-3', { id: 'bike-exp-3', userId: 'rider-expired' }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
+  const bikeAllowed = evalAllowCreateMotorcycle(auth, 'bike-exp-3', { id: 'bike-exp-3', userId: 'rider-expired', cloudVersion: 1 }, motorcyclesBefore, userBefore, userAfter, usersDb, nowMs, adminsDb);
 
   assert(!bikeAllowed, 'Expired Pro rider was permitted to add bike beyond Free limit');
   console.log('✓ SCENARIO 4 PASS: Expired Pro user cannot create additional motorcycles beyond Free quota.');
@@ -297,12 +408,10 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 // SCENARIO 5: Replaying a previous create counter transition is rejected
 {
   const auth: MockAuth = { uid: 'attacker', token: { email: 'atk@example.com', email_verified: true } };
-  // Pre-existing motorcycle that was created yesterday:
   const preExistingBikeId = 'bike-already-there';
-  const motorcyclesBefore = new Map([[preExistingBikeId, { data: { id: preExistingBikeId, userId: 'attacker' } }]]);
-  const motorcyclesAfter = new Map([[preExistingBikeId, { data: { id: preExistingBikeId, userId: 'attacker' } }]]);
+  const motorcyclesBefore = new Map([[preExistingBikeId, { data: { id: preExistingBikeId, userId: 'attacker', cloudVersion: 1 } }]]);
+  const motorcyclesAfter = new Map([[preExistingBikeId, { data: { id: preExistingBikeId, userId: 'attacker', cloudVersion: 1 } }]]);
 
-  // Attacker attempts to replay create using this pre-existing motorcycle ID to increment bikeCount:
   const userBefore: MockDoc = { data: { id: 'attacker', subscriptionTier: 'pro', bikeCount: 2 } };
   const userAfter: MockDoc = { data: { id: 'attacker', subscriptionTier: 'pro', bikeCount: 3, lastBikeId: preExistingBikeId, lastBikeAction: 'create' } };
 
@@ -314,12 +423,10 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 // SCENARIO 6: Replaying a previous delete counter transition is rejected
 {
   const auth: MockAuth = { uid: 'attacker', token: { email: 'atk@example.com', email_verified: true } };
-  // Non-existent or previously-deleted motorcycle:
   const alreadyDeletedBikeId = 'bike-deleted-yesterday';
-  const motorcyclesBefore = new Map<string, MockDoc>(); // does NOT exist before!
-  const motorcyclesAfter = new Map<string, MockDoc>();  // does NOT exist after!
+  const motorcyclesBefore = new Map<string, MockDoc>();
+  const motorcyclesAfter = new Map<string, MockDoc>();
 
-  // Attacker attempts to replay delete using this already-deleted bike ID to decrement bikeCount:
   const userBefore: MockDoc = { data: { id: 'attacker', subscriptionTier: 'pro', bikeCount: 2 } };
   const userAfter: MockDoc = { data: { id: 'attacker', subscriptionTier: 'pro', bikeCount: 1, lastBikeId: alreadyDeletedBikeId, lastBikeAction: 'delete' } };
 
@@ -332,7 +439,6 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 {
   const auth: MockAuth = { uid: 'rider-1', token: { email: 'r1@example.com', email_verified: true } };
   const userBefore: MockDoc = { data: { id: 'rider-1', subscriptionTier: 'free', bikeCount: 1 } };
-  // Malicious rider tries to arbitrarily set bikeCount to 0 without deleting anything
   const userAfter: MockDoc = { data: { id: 'rider-1', subscriptionTier: 'free', bikeCount: 0 } };
 
   const allowed = evalAllowUpdateUser(auth, 'rider-1', userBefore.data, userAfter.data, adminsDb, new Map(), new Map());
@@ -364,7 +470,7 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
   const bikeAllowed = evalAllowCreateMotorcycle(
     auth,
     'bike-victim',
-    { id: 'bike-victim', userId: 'victim' }, // Spoofed victim userId
+    { id: 'bike-victim', userId: 'victim', cloudVersion: 1 },
     new Map(),
     userBefore,
     userAfter,
@@ -379,7 +485,6 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 // SCENARIO 10: User retains access to their historical motorcycles and maintenance records after expiration
 {
   const auth: MockAuth = { uid: 'expired-user', token: { email: 'exp@example.com', email_verified: true } };
-  // Evaluation of allow get, list: if isOwner(resource.data.userId) || isAdmin();
   const ownsMotorcycle = evalIsOwner(auth, 'expired-user');
   const ownsServiceRecord = evalIsOwner(auth, 'expired-user');
   const ownsReminder = evalIsOwner(auth, 'expired-user');
@@ -392,13 +497,13 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 {
   const auth: MockAuth = { uid: 'rider-1', token: { email: 'r1@example.com', email_verified: true } };
   const bikeId = 'bike-to-delete';
-  const motorcyclesBefore = new Map([[bikeId, { data: { id: bikeId, userId: 'rider-1' } }]]);
-  const motorcyclesAfter = new Map<string, MockDoc>(); // Deleted!
+  const motorcyclesBefore = new Map([[bikeId, { data: { id: bikeId, userId: 'rider-1', cloudVersion: 1 } }]]);
+  const motorcyclesAfter = new Map<string, MockDoc>();
   const userBefore: MockDoc = { data: { id: 'rider-1', bikeCount: 2 } };
   const userAfter: MockDoc = { data: { id: 'rider-1', bikeCount: 1, lastBikeId: bikeId, lastBikeAction: 'delete' } };
 
   const userAllowed = evalAllowUpdateUser(auth, 'rider-1', userBefore.data, userAfter.data, adminsDb, motorcyclesBefore, motorcyclesAfter);
-  const bikeAllowed = evalAllowDeleteMotorcycle(auth, { id: bikeId, userId: 'rider-1' }, bikeId, motorcyclesBefore, userBefore, userAfter, adminsDb);
+  const bikeAllowed = evalAllowDeleteMotorcycle(auth, { id: bikeId, userId: 'rider-1', cloudVersion: 1 }, bikeId, motorcyclesBefore, userBefore, userAfter, adminsDb);
 
   assert(userAllowed && bikeAllowed, 'Legitimate bike deletion and counter decrement failed');
   console.log('✓ SCENARIO 11 PASS: Deleting a motorcycle correctly decrements bikeCount (2 -> 1).');
@@ -408,10 +513,9 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 {
   const auth: MockAuth = { uid: 'rider-1', token: { email: 'r1@example.com', email_verified: true } };
   const userBefore: MockDoc = { data: { id: 'rider-1', bikeCount: 1 } };
-  // Jumped counter (+2 instead of +1)
   const userJumpedCount: MockDoc = { data: { id: 'rider-1', bikeCount: 3, lastBikeId: 'bike-new', lastBikeAction: 'create' } };
   const motorcyclesBefore = new Map<string, MockDoc>();
-  const motorcyclesAfter = new Map([['bike-new', { data: { id: 'bike-new', userId: 'rider-1' } }]]);
+  const motorcyclesAfter = new Map([['bike-new', { data: { id: 'bike-new', userId: 'rider-1', cloudVersion: 1 } }]]);
 
   const jumpedAllowed = evalAllowUpdateUser(auth, 'rider-1', userBefore.data, userJumpedCount.data, adminsDb, motorcyclesBefore, motorcyclesAfter);
   assert(!jumpedAllowed, 'Jumped counter transition was allowed');
@@ -420,7 +524,6 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
 
 // SCENARIO 13: Existing users' counters are reconciled without modifying their motorcycles or subscriptions
 {
-  // Simulated database with existing rider owning 3 motorcycles, but stored bikeCount is missing/outdated
   const riderId = 'legacy-rider';
   const legacyUser = {
     id: riderId,
@@ -436,25 +539,132 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
     { id: 'bike-leg-3', userId: riderId, model: 'Click 125i' },
   ];
 
-  // Admin reconciliation logic (mirrors reconcileUserBikeCount):
   const actualMotorcycleCount = legacyBikes.filter(b => b.userId === riderId).length;
   assert(actualMotorcycleCount === 3, 'Actual count is 3');
 
-  // Reconciled user document:
   const reconciledUser = {
     ...legacyUser,
     bikeCount: actualMotorcycleCount,
     updatedAt: new Date().toISOString(),
   };
 
-  // Assertions:
   assert(reconciledUser.bikeCount === 3, 'Bike count reconciled to 3');
   assert(reconciledUser.subscriptionTier === 'free', 'Subscription tier untouched');
   assert(legacyBikes.length === 3, 'All 3 legacy motorcycles retained without deletion');
   console.log('✓ SCENARIO 13 PASS: Existing users counters are reconciled safely without deleting motorcycles or resetting subscriptions.');
 }
 
+// =============================================================================
+// SCENARIOS 14–25: CLOUDVERSION & PARENT MOTORCYCLE OWNERSHIP RULES
+// =============================================================================
+
+const cvAuth: MockAuth = { uid: 'rider-cv', token: { email: 'cv@example.com', email_verified: true } };
+const cvUserBefore: MockDoc = { data: { id: 'rider-cv', subscriptionTier: 'free', bikeCount: 0 } };
+const cvUserAfter: MockDoc = { data: { id: 'rider-cv', subscriptionTier: 'free', bikeCount: 1, lastBikeId: 'bike-cv', lastBikeAction: 'create' } };
+const cvUsersDb = new Map([['rider-cv', cvUserBefore]]);
+const cvBikesDb = new Map([['bike-cv', { data: { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 } }]]);
+
+// SCENARIO 14: Create with cloudVersion 1 succeeds
+{
+  const bikeOk = evalAllowCreateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, new Map(), cvUserBefore, cvUserAfter, cvUsersDb, nowMs, adminsDb);
+  const remOk = evalAllowCreateReminder(cvAuth, 'rem-cv', { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1 }, cvBikesDb);
+  const recOk = evalAllowCreateServiceRecord(cvAuth, 'rec-cv', { id: 'rec-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1 }, cvBikesDb);
+  assert(bikeOk && remOk && recOk, 'Create with cloudVersion 1 failed');
+  console.log('✓ SCENARIO 14 PASS: Create with cloudVersion == 1 succeeds across motorcycles, reminders, and serviceRecords.');
+}
+
+// SCENARIO 15: Create without cloudVersion fails
+{
+  const bikeNoCv = evalAllowCreateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv' }, new Map(), cvUserBefore, cvUserAfter, cvUsersDb, nowMs, adminsDb);
+  const remNoCv = evalAllowCreateReminder(cvAuth, 'rem-cv', { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv' }, cvBikesDb);
+  const recNoCv = evalAllowCreateServiceRecord(cvAuth, 'rec-cv', { id: 'rec-cv', userId: 'rider-cv', bikeId: 'bike-cv' }, cvBikesDb);
+  assert(!bikeNoCv && !remNoCv && !recNoCv, 'Create without cloudVersion was allowed');
+  console.log('✓ SCENARIO 15 PASS: Create without cloudVersion is rejected.');
+}
+
+// SCENARIO 16: Create with cloudVersion 2 fails
+{
+  const bikeCv2 = evalAllowCreateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2 }, new Map(), cvUserBefore, cvUserAfter, cvUsersDb, nowMs, adminsDb);
+  const remCv2 = evalAllowCreateReminder(cvAuth, 'rem-cv', { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 2 }, cvBikesDb);
+  const recCv2 = evalAllowCreateServiceRecord(cvAuth, 'rec-cv', { id: 'rec-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 2 }, cvBikesDb);
+  assert(!bikeCv2 && !remCv2 && !recCv2, 'Create with cloudVersion 2 was allowed');
+  console.log('✓ SCENARIO 16 PASS: Create with cloudVersion == 2 is rejected.');
+}
+
+// SCENARIO 17: Update from version 1 to 2 succeeds
+{
+  const bikeUp = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2 }, adminsDb);
+  const remUp = evalAllowUpdateReminder(cvAuth, 'rem-cv', { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1 }, { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 2 }, cvBikesDb, adminsDb);
+  const recUp = evalAllowUpdateServiceRecord(cvAuth, 'rec-cv', { id: 'rec-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1 }, { id: 'rec-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 2 }, cvBikesDb, adminsDb);
+  assert(bikeUp && remUp && recUp, 'Update from cloudVersion 1 to 2 failed');
+  console.log('✓ SCENARIO 17 PASS: Update from cloudVersion 1 to 2 succeeds.');
+}
+
+// SCENARIO 18: Update leaving version unchanged fails
+{
+  const sameV = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, adminsDb);
+  assert(!sameV, 'Unchanged cloudVersion update was allowed');
+  console.log('✓ SCENARIO 18 PASS: Update leaving cloudVersion unchanged (1 -> 1) is rejected.');
+}
+
+// SCENARIO 19: Update decreasing version fails
+{
+  const decV = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, adminsDb);
+  assert(!decV, 'Decreased cloudVersion update was allowed');
+  console.log('✓ SCENARIO 19 PASS: Update decreasing cloudVersion (2 -> 1) is rejected.');
+}
+
+// SCENARIO 20: Update jumping from 1 to 3 fails
+{
+  const jumpV = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 3 }, adminsDb);
+  assert(!jumpV, 'Jumped cloudVersion update (1 -> 3) was allowed');
+  console.log('✓ SCENARIO 20 PASS: Update jumping cloudVersion from 1 to 3 is rejected.');
+}
+
+// SCENARIO 21: Legacy document without cloudVersion can be updated to version 1
+{
+  const legOk = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv' }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, adminsDb);
+  assert(legOk, 'Legacy document first update to cloudVersion 1 failed');
+  console.log('✓ SCENARIO 21 PASS: Legacy document without cloudVersion can be updated to cloudVersion == 1.');
+}
+
+// SCENARIO 22: Legacy document's first update to version 2 is rejected
+{
+  const legBad = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv' }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2 }, adminsDb);
+  assert(!legBad, 'Legacy document first update to cloudVersion 2 was allowed');
+  console.log("✓ SCENARIO 22 PASS: Legacy document's first update to cloudVersion == 2 is rejected.");
+}
+
+// SCENARIO 23: Cross-user attempts remain blocked
+{
+  const attacker: MockAuth = { uid: 'attacker-uid', token: { email: 'atk@example.com', email_verified: true } };
+  const crossBike = evalAllowUpdateMotorcycle(attacker, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2 }, adminsDb);
+  const crossRem = evalAllowUpdateReminder(attacker, 'rem-cv', { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1 }, { id: 'rem-cv', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 2 }, cvBikesDb, adminsDb);
+  assert(!crossBike && !crossRem, 'Cross-user update was allowed');
+  console.log('✓ SCENARIO 23 PASS: Cross-user attempts remain blocked.');
+}
+
+// SCENARIO 24: Unauthorized parent motorcycle references remain blocked
+{
+  const attacker: MockAuth = { uid: 'attacker-uid', token: { email: 'atk@example.com', email_verified: true } };
+  const foreignRem = evalAllowCreateReminder(attacker, 'rem-atk', { id: 'rem-atk', userId: 'attacker-uid', bikeId: 'bike-cv', cloudVersion: 1 }, cvBikesDb);
+  const foreignRec = evalAllowCreateServiceRecord(attacker, 'rec-atk', { id: 'rec-atk', userId: 'attacker-uid', bikeId: 'bike-cv', cloudVersion: 1 }, cvBikesDb);
+  const missingBikeRem = evalAllowCreateReminder(cvAuth, 'rem-orphan', { id: 'rem-orphan', userId: 'rider-cv', bikeId: 'nonexistent-bike', cloudVersion: 1 }, cvBikesDb);
+  assert(!foreignRem && !foreignRec && !missingBikeRem, 'Unauthorized parent motorcycle reference was allowed');
+  console.log('✓ SCENARIO 24 PASS: Unauthorized or nonexistent parent motorcycle references remain blocked.');
+}
+
+// SCENARIO 25: Malformed legacy cloudVersion values are rejected on update
+{
+  const malformedStr = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: '1' }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2 }, adminsDb);
+  const malformedZero = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 0 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, adminsDb);
+  const malformedFloat = evalAllowUpdateMotorcycle(cvAuth, 'bike-cv', { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 }, { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1.5 }, adminsDb);
+  assert(!malformedStr && !malformedZero && !malformedFloat, 'Malformed cloudVersion was allowed');
+  console.log('✓ SCENARIO 25 PASS: Malformed legacy or incoming cloudVersion values are rejected.');
+}
+
 console.log('\n========================================================================');
-console.log(' ALL 13 TARGETED VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS');
+console.log(' ALL 25 TARGETED VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS');
 console.log('========================================================================');
 process.exit(0);
+

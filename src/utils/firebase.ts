@@ -12,10 +12,10 @@ import {
   sendEmailVerification,
   updateProfile,
 } from 'firebase/auth';
+import * as firestoreModule from 'firebase/firestore';
 import {
   getFirestore,
   doc,
-  getDocFromServer,
   collection,
   setDoc,
   getDoc,
@@ -31,9 +31,33 @@ import firebaseConfig from '../../firebase-applet-config.json';
 // Initialize Firebase App
 export const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with custom databaseId
+// Silence noisy internal @firebase/firestore WebChannel fallback logs in iframe/offline environments
+try {
+  const maybeSetLogLevel = (firestoreModule as Record<string, unknown>).setLogLevel;
+  if (typeof maybeSetLogLevel === 'function') {
+    maybeSetLogLevel('silent');
+  }
+} catch {
+  // ignore if unsupported in mock environment
+}
+
+// Initialize Firestore with custom databaseId and auto-detected long polling for proxy/iframe reliability
 // CRITICAL: The app will break without passing firebaseConfig.firestoreDatabaseId
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = (() => {
+  try {
+    const maybeInitFirestore = (firestoreModule as Record<string, unknown>).initializeFirestore;
+    if (typeof maybeInitFirestore === 'function') {
+      return maybeInitFirestore(
+        app,
+        { experimentalAutoDetectLongPolling: true },
+        firebaseConfig.firestoreDatabaseId
+      ) as ReturnType<typeof getFirestore>;
+    }
+  } catch {
+    // Fallback if already initialized or running in a test mock
+  }
+  return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+})();
 
 // Initialize Firebase Authentication
 export const auth = getAuth(app);
@@ -71,8 +95,9 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  const errMsg = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -88,25 +113,24 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  const isTransientOffline =
+    errMsg.toLowerCase().includes('unavailable') ||
+    errMsg.toLowerCase().includes('offline');
+  if (isTransientOffline) {
+    console.warn('MotoCare Firestore offline/cached fallback:', JSON.stringify(errInfo));
+  } else {
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  }
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Test Connection on Boot (handles offline/network unavailability gracefully)
-export async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    // Gracefully ignore offline or network unavailability without blocking the app
-    const msg = error instanceof Error ? error.message : String(error);
-    if (msg.includes('offline') || msg.includes('unavailable')) {
-      console.info('MotoCare: Firestore running in offline or cached mode.');
-    }
+// On-demand connection check (does not fire unsolicited server RPCs on module import)
+export async function testConnection(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return false;
   }
+  return true;
 }
-
-// Kick off initial connection test safely
-testConnection().catch(() => {});
 
 // Authentication Helpers
 export async function signInWithGoogle(): Promise<FirebaseUser | null> {

@@ -7,7 +7,12 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    include: ['tests/adminFooterLink.test.tsx', 'tests/**/*.spec.{ts,tsx}'],
+    include: [
+      'tests/adminFooterLink.test.tsx',
+      'tests/preBetaSecurityAndCleanup.test.tsx',
+      'tests/cloudSyncAndMigration.test.tsx',
+      'tests/**/*.spec.{ts,tsx}',
+    ],
   },
   resolve: {
     alias: {

@@ -99,6 +99,7 @@
         "receiptNumber": { "type": "string", "description": "Official receipt number." },
         "isCasaVerified": { "type": "boolean", "description": "Whether service has Casa stamp." },
         "linkedReminderId": { "type": "string", "description": "ID of reminder reset by this service." },
+        "bikeLabelSnapshot": { "type": "string", "description": "Snapshot of motorcycle label at time of service for preserved records." },
         "createdAt": { "type": "string", "description": "Creation timestamp." },
         "updatedAt": { "type": "string", "description": "Last update timestamp." }
       },

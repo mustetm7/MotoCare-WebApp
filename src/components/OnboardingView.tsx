@@ -5,12 +5,11 @@ import { PWAInstallButton } from './PWAInstallButton';
 
 interface OnboardingViewProps {
   onAddMotorcycle: () => void;
-  onQuickLoadSample: () => void;
+  onQuickLoadSample?: () => void;
 }
 
 export const OnboardingView: React.FC<OnboardingViewProps> = ({
   onAddMotorcycle,
-  onQuickLoadSample,
 }) => {
   return (
     <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden my-4 pb-8 space-y-6 animate-in fade-in duration-200">
@@ -107,17 +106,6 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             <span>Add Your Motorcycle</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              sounds.playSuccess();
-              onQuickLoadSample();
-            }}
-            className="text-xs font-bold text-[#00ACC1] hover:underline"
-          >
-            Quick Load Sample: Yamaha NMAX 155
           </button>
         </div>
       </div>

@@ -9,6 +9,7 @@ interface CasaBookletModalProps {
   bike: Motorcycle;
   records: ServiceRecord[];
   subscription: UserSubscription;
+  hasProAccess?: boolean;
   onOpenPaywall: () => void;
 }
 
@@ -18,11 +19,16 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
   bike,
   records,
   subscription,
+  hasProAccess,
   onOpenPaywall,
 }) => {
   if (!isOpen) return null;
 
-  const isPro = subscription.tier === 'pro';
+  const isPro =
+    hasProAccess ??
+    (subscription.tier === 'pro' &&
+      subscription.status === 'active' &&
+      !subscription.isExpired);
   const bikeRecords = records.filter((r) => r.bikeId === bike.id);
   const totalSpent = bikeRecords.reduce((sum, r) => sum + r.totalCostPhp, 0);
   const casaCount = bikeRecords.filter((r) => r.type === 'Casa / Official 3S').length;

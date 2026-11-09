@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
-import { UserAccount, AccountPaymentStatus, DashboardSubscriptionStatus } from '../types';
+import {
+  UserAccount,
+  AccountPaymentStatus,
+  DashboardSubscriptionStatus,
+  OfflineMutationItem,
+  QuarantinedMutationItem,
+  CloudSyncLogEntry,
+} from '../types';
 import {
   ShieldCheck,
   CheckCircle2,
@@ -48,10 +55,19 @@ import {
   executeCounterReconciliation,
   generateTimestampMigrationDryRun,
   executeTimestampMigration,
+  flushOfflineMutationQueue,
+  recoverQuarantinedMutationSafely,
   CounterReconciliationReport,
   TimestampMigrationReport,
   PaymentSubmission,
 } from '../utils/firestoreService';
+import {
+  getOfflineMutationQueue,
+  getQuarantinedMutationQueue,
+  removeQuarantinedMutation,
+  getCloudSyncOperationLogs,
+  clearCloudSyncOperationLogs,
+} from '../utils/storage';
 
 interface AdminUsersPortalProps {
   users: UserAccount[];
@@ -60,6 +76,34 @@ interface AdminUsersPortalProps {
   onAddUser: (user: Omit<UserAccount, 'id' | 'registeredAt'>) => void;
   onResetUsersToDefault: () => void;
   onReturnToApp?: () => void;
+}
+
+/**
+ * Determines whether a Firestore user record represents an active paying Pro subscriber
+ * for Admin Portal metrics (activeProUsers and totalRevenue).
+ * Requires:
+ * - subscriptionTier === 'pro'
+ * - subscriptionStatus !== 'revoked' and !== 'expired' and !== 'free'
+ * - a valid, parseable expiryDate strictly in the future (expiry > now)
+ *
+ * The owner account (mustetm7@gmail.com) is NEVER counted as a paying Pro subscriber
+ * unless an actual paid Pro subscription with a future expiryDate exists.
+ */
+export function isCountedAsActivePaidProSubscriber(
+  fUser: {
+    subscriptionTier?: string;
+    subscriptionStatus?: string;
+    expiryDate?: unknown;
+  },
+  now: Date = new Date()
+): boolean {
+  const isStoredPro = fUser.subscriptionTier === 'pro';
+  const rawStatus = fUser.subscriptionStatus || 'free';
+  if (!isStoredPro || rawStatus === 'revoked' || rawStatus === 'expired' || rawStatus === 'free') {
+    return false;
+  }
+  const expiry = parseExpiryToDate(fUser.expiryDate);
+  return expiry !== null && expiry.getTime() > now.getTime();
 }
 
 interface ApprovalPreview {
@@ -384,6 +428,86 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [isLoadingHealth, setIsLoadingHealth] = useState(false);
   const [healthFilter, setHealthFilter] = useState<'all' | 'flagged'>('all');
 
+  // Cloud Sync Queue & Operation Telemetry State for Current User
+  const currentDiagnosticUserId = auth.currentUser?.uid || '';
+  const [syncDiagQueue, setSyncDiagQueue] = useState<OfflineMutationItem[]>(() =>
+    getOfflineMutationQueue(auth.currentUser?.uid || '')
+  );
+  const [syncDiagQuarantined, setSyncDiagQuarantined] = useState<QuarantinedMutationItem[]>(() =>
+    getQuarantinedMutationQueue(auth.currentUser?.uid || '')
+  );
+  const [syncDiagLogs, setSyncDiagLogs] = useState<{
+    allLogs: CloudSyncLogEntry[];
+    last5Successful: CloudSyncLogEntry[];
+    last5Failed: CloudSyncLogEntry[];
+  }>(() => getCloudSyncOperationLogs(auth.currentUser?.uid || ''));
+  const [isFlushingDiagQueue, setIsFlushingDiagQueue] = useState(false);
+
+  const refreshCloudSyncDiagnostics = React.useCallback(() => {
+    const uid = auth.currentUser?.uid || '';
+    setSyncDiagQueue(getOfflineMutationQueue(uid));
+    setSyncDiagQuarantined(getQuarantinedMutationQueue(uid));
+    setSyncDiagLogs(getCloudSyncOperationLogs(uid));
+  }, []);
+
+  React.useEffect(() => {
+    refreshCloudSyncDiagnostics();
+  }, [isAuthenticated, activeAdminTab, refreshCloudSyncDiagnostics]);
+
+  const handleFlushDiagnosticQueue = async () => {
+    const uid = auth.currentUser?.uid || '';
+    if (!uid) return;
+    setIsFlushingDiagQueue(true);
+    try {
+      const res = await flushOfflineMutationQueue(uid);
+      refreshCloudSyncDiagnostics();
+      if (res.skippedOffline) {
+        setPortalToast({
+          msg: 'Flush skipped: Device is currently offline. Queued mutations are preserved without incrementing retry counts.',
+          type: 'info',
+        });
+      } else {
+        setPortalToast({
+          msg: `Queue replay finished: ${res.flushedCount} flushed, ${res.failedCount} failed, ${res.quarantinedCount} quarantined.`,
+          type: res.failedCount > 0 ? 'info' : 'success',
+        });
+      }
+    } catch (err: any) {
+      refreshCloudSyncDiagnostics();
+      setPortalToast({
+        msg: `Queue replay error: ${err?.message || 'Unknown error'}`,
+        type: 'error',
+      });
+    } finally {
+      setIsFlushingDiagQueue(false);
+    }
+  };
+
+  const handleRecoverQuarantinedMutation = async (mutationId: string) => {
+    const uid = auth.currentUser?.uid || '';
+    if (!uid) return;
+    const result = await recoverQuarantinedMutationSafely(uid, mutationId);
+    refreshCloudSyncDiagnostics();
+    setPortalToast({
+      msg: result.detail,
+      type: result.status === 'requeued' ? 'success' : 'info',
+    });
+  };
+
+  const handleDismissQuarantinedMutation = (mutationId: string) => {
+    const uid = auth.currentUser?.uid || '';
+    if (!uid) return;
+    removeQuarantinedMutation(uid, mutationId);
+    refreshCloudSyncDiagnostics();
+  };
+
+  const handleClearDiagnosticLogs = () => {
+    const uid = auth.currentUser?.uid || '';
+    if (!uid) return;
+    clearCloudSyncOperationLogs(uid);
+    refreshCloudSyncDiagnostics();
+  };
+
   const handleRunSystemHealthAudit = async () => {
     setIsLoadingHealth(true);
     sounds.playClick();
@@ -493,17 +617,25 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [newInitialStatus, setNewInitialStatus] = useState<AccountPaymentStatus>('pending_approval');
   const [newNotes, setNewNotes] = useState('');
 
-  // Combine Firestore users, live submissions, and prop users with full lifecycle calculations
+  // Build directory exclusively from live Firestore user records and live Firestore submissions
   const allUsers: UserAccount[] = React.useMemo(() => {
-    const list: UserAccount[] = [...users];
+    const list: UserAccount[] = [];
     const now = new Date();
 
-    // 1. Overlay live Firestore user docs
+    // 1. Load live Firestore user docs
     firestoreUsers.forEach((fUser) => {
       const idx = list.findIndex((u) => u.id === fUser.id);
       const isStoredPro = fUser.subscriptionTier === 'pro';
+      const rawSubStatus = fUser.subscriptionStatus || 'free';
       const expiry = parseExpiryToDate(fUser.expiryDate);
+      const hasValidFutureExpiry = expiry !== null && expiry.getTime() > now.getTime();
       const isExpired = expiry !== null && expiry.getTime() <= now.getTime();
+      const isActivePaidPro =
+        isStoredPro &&
+        hasValidFutureExpiry &&
+        rawSubStatus !== 'revoked' &&
+        rawSubStatus !== 'expired' &&
+        rawSubStatus !== 'free';
       const expiryIso = expiry ? expiry.toISOString() : undefined;
 
       const merged: UserAccount = {
@@ -515,8 +647,8 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         bikeNickname: fUser.bikeNickname || (idx >= 0 ? list[idx].bikeNickname : undefined),
         bikePlate: fUser.bikePlate || (idx >= 0 ? list[idx].bikePlate : undefined),
         bikeCount: typeof fUser.bikeCount === 'number' ? fUser.bikeCount : (idx >= 0 ? list[idx].bikeCount : undefined),
-        subscriptionTier: isStoredPro && !isExpired ? 'pro' : 'free',
-        paymentStatus: fUser.paymentStatus || 'unpaid_free',
+        subscriptionTier: isActivePaidPro ? 'pro' : 'free',
+        paymentStatus: isExpired ? 'expired' : fUser.paymentStatus || 'unpaid_free',
         subscriptionStartDate: fUser.subscriptionStartDate,
         expiryDate: expiryIso,
         billingAnchorDay: fUser.billingAnchorDay,
@@ -540,6 +672,8 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
       const targetUser = existingIdx >= 0 ? list[existingIdx] : null;
       const isPending = sub.status === 'pending_approval';
+      const targetExpiry = targetUser?.expiryDate ? new Date(targetUser.expiryDate) : null;
+      const targetHasFutureExpiry = targetExpiry !== null && targetExpiry.getTime() > now.getTime();
 
       const mappedUser: UserAccount = {
         id: sub.userId,
@@ -549,7 +683,8 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         bikeModel: sub.bikeModel || targetUser?.bikeModel || 'Motorcycle',
         bikePlate: sub.bikePlate || targetUser?.bikePlate || '',
         bikeNickname: targetUser?.bikeNickname,
-        subscriptionTier: targetUser?.subscriptionTier || (sub.status === 'active_pro' ? 'pro' : 'free'),
+        subscriptionTier:
+          targetUser?.subscriptionTier === 'pro' && targetHasFutureExpiry ? 'pro' : 'free',
         paymentStatus: isPending ? 'pending_approval' : targetUser?.paymentStatus || sub.status,
         paymentMethod: sub.paymentMethod || targetUser?.paymentMethod,
         referenceNumber: sub.referenceNumber || targetUser?.referenceNumber,
@@ -579,15 +714,16 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
       const hasPendingRenewal = Boolean(pendingSub);
 
       const expiry = u.expiryDate ? new Date(u.expiryDate) : null;
+      const hasValidFutureExpiry = expiry !== null && expiry.getTime() > now.getTime();
       const isExpired = Boolean(u.expiryDate) && expiry !== null && expiry.getTime() <= now.getTime();
-      const isPro = u.subscriptionTier === 'pro';
+      const isPro = u.subscriptionTier === 'pro' && hasValidFutureExpiry;
 
       let effectiveStatus: DashboardSubscriptionStatus;
       if (hasPendingRenewal) {
         effectiveStatus = 'PENDING RENEWAL';
-      } else if (isPro && !isExpired) {
+      } else if (isPro) {
         effectiveStatus = 'ACTIVE';
-      } else if (isExpired || (isPro && isExpired)) {
+      } else if (isExpired) {
         effectiveStatus = 'EXPIRED';
       } else if (u.paymentStatus === 'rejected') {
         effectiveStatus = 'REJECTED';
@@ -607,7 +743,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         amountPhp: pendingSub?.amountPhp || u.amountPhp || 49,
       };
     });
-  }, [users, firestoreUsers, firestoreSubmissions]);
+  }, [firestoreUsers, firestoreSubmissions]);
 
   // Handle Google Admin Login (Zero Trust - requires owner email + email_verified)
   const handleGoogleAdminLogin = async () => {
@@ -1092,6 +1228,297 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           )}
         </div>
 
+        {/* ======================================================== */}
+        {/* CLOUD SYNC WRITE QUEUE & TELEMETRY DIAGNOSTIC PANEL      */}
+        {/* ======================================================== */}
+        <section
+          data-testid="admin-cloud-sync-diagnostic-panel"
+          className="p-5 bg-slate-900 border border-slate-800 rounded-3xl space-y-4 shadow-xl"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 rounded-2xl">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-sm sm:text-base font-black text-white">
+                    Cloud Sync Write Queue & Operation Diagnostics
+                  </h2>
+                  <span
+                    data-testid="firestore-write-queue-size-badge"
+                    className={`px-2 py-0.5 rounded-md font-mono text-[10px] font-black uppercase ${
+                      syncDiagQueue.length > 0
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                    }`}
+                  >
+                    Write Queue Size: {syncDiagQueue.length}
+                  </span>
+                  <span
+                    data-testid="quarantined-queue-size-badge"
+                    className={`px-2 py-0.5 rounded-md font-mono text-[10px] font-black uppercase ${
+                      syncDiagQuarantined.length > 0
+                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                        : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}
+                  >
+                    Quarantined: {syncDiagQuarantined.length}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Real-time Firestore offline write queue depth, recoverable quarantine store, and the last 5 successful vs. failed cloud sync operations for current user (
+                  <code className="text-cyan-300 font-mono">{currentDiagnosticUserId || 'unauthenticated'}</code>).
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={refreshCloudSyncDiagnostics}
+                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh</span>
+              </button>
+              {syncDiagQueue.length > 0 && (
+                <button
+                  type="button"
+                  disabled={isFlushingDiagQueue}
+                  onClick={handleFlushDiagnosticQueue}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isFlushingDiagQueue ? 'animate-spin' : ''}`} />
+                  <span>{isFlushingDiagQueue ? 'Flushing...' : 'Flush Queue'}</span>
+                </button>
+              )}
+              {syncDiagLogs.allLogs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearDiagnosticLogs}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-[11px] font-bold cursor-pointer"
+                >
+                  Clear Log
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Pending Write Queue Items (if any) */}
+          {syncDiagQueue.length > 0 && (
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+              <div className="text-[11px] font-black uppercase tracking-wider text-amber-300 flex items-center justify-between">
+                <span>Queued Offline Mutations ({syncDiagQueue.length})</span>
+                <span className="font-mono text-[10px]">Coalesced FIFO Queue</span>
+              </div>
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {syncDiagQueue.map((qItem) => (
+                  <div
+                    key={qItem.id}
+                    className="p-2 rounded-xl bg-slate-950/70 border border-amber-500/20 text-[11px] flex items-center justify-between gap-2"
+                  >
+                    <div className="font-mono text-slate-200 truncate">
+                      <span className="text-amber-300 font-bold uppercase">{qItem.action}</span>{' '}
+                      <span className="text-slate-400">[{qItem.entity}]</span> →{' '}
+                      <span className="text-white">{qItem.targetId}</span>
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400 shrink-0">
+                      Retries: {qItem.retryCount}
+                      {qItem.lastError ? ` • Err: ${qItem.lastError.slice(0, 32)}` : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Quarantined Mutations (Recoverable Payload Store) */}
+          {syncDiagQuarantined.length > 0 && (
+            <div
+              data-testid="quarantined-mutations-section"
+              className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-2.5"
+            >
+              <div className="text-[11px] font-black uppercase tracking-wider text-rose-300 flex items-center justify-between">
+                <span>Quarantined Mutations ({syncDiagQuarantined.length}) — Recoverable Payloads</span>
+                <span className="font-mono text-[10px]">UID-Scoped Quarantine</span>
+              </div>
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {syncDiagQuarantined.map((qItem) => {
+                  const payloadSummary = qItem.payload
+                    ? Object.entries(qItem.payload)
+                        .filter(([k]) => ['odometer', 'title', 'brand', 'model', 'licensePlate'].includes(k))
+                        .map(([k, v]) => `${k}: ${String(v)}`)
+                        .join(', ')
+                    : 'No payload body';
+                  return (
+                    <div
+                      key={qItem.id}
+                      data-testid={`quarantined-item-${qItem.id}`}
+                      className="p-2.5 rounded-xl bg-slate-950/80 border border-rose-500/30 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="font-mono font-bold text-rose-200 flex items-center gap-1.5 flex-wrap">
+                          <span className="uppercase text-amber-300">{qItem.action}</span>
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px]">
+                            {qItem.entity}
+                          </span>
+                          <span className="text-white">#{qItem.targetId}</span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[10px] border ${
+                              qItem.failureClassification === 'version_conflict'
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                : 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+                            }`}
+                          >
+                            {qItem.failureClassification}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-300 font-mono truncate">
+                          Payload: {payloadSummary || ' preserved'} • Retries: {qItem.retryCount}
+                        </div>
+                        {qItem.failureClassification === 'version_conflict' && (
+                          <div className="text-[10px] text-amber-300 font-mono truncate">
+                            Version Conflict: Base={qItem.baseCloudUpdatedAt ?? 'untrusted/legacy'} vs Cloud={qItem.conflictCloudUpdatedAt ?? 'newer'}
+                          </div>
+                        )}
+                        <div className="text-[10px] text-rose-300/90 font-mono truncate">
+                          {qItem.conflictReason
+                            ? `Conflict: ${qItem.conflictReason}`
+                            : `Error: ${qItem.lastError}`}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          data-testid={`requeue-quarantined-${qItem.id}`}
+                          onClick={() => handleRecoverQuarantinedMutation(qItem.id)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] transition-colors cursor-pointer"
+                        >
+                          Requeue Safely
+                        </button>
+                        <button
+                          type="button"
+                          data-testid={`dismiss-quarantined-${qItem.id}`}
+                          onClick={() => handleDismissQuarantinedMutation(qItem.id)}
+                          className="px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white font-bold text-[11px] transition-colors cursor-pointer"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Last 5 Successful vs Last 5 Failed Operations */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Last 5 Successful */}
+            <div
+              data-testid="sync-logs-successful-column"
+              className="p-3.5 rounded-2xl bg-slate-950/60 border border-emerald-500/25 space-y-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Last 5 Successful Sync Operations</span>
+                </div>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-mono text-[10px] font-bold">
+                  {syncDiagLogs.last5Successful.length} / 5
+                </span>
+              </div>
+
+              {syncDiagLogs.last5Successful.length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-500 italic">
+                  No successful cloud sync operations recorded in this session yet.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {syncDiagLogs.last5Successful.map((entry) => (
+                    <div
+                      key={entry.id}
+                      data-testid={`sync-log-success-${entry.id}`}
+                      className="p-2.5 rounded-xl bg-slate-900 border border-slate-800/90 text-xs flex items-start justify-between gap-2"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="font-mono font-bold text-emerald-300 flex items-center gap-1.5 flex-wrap">
+                          <span>{entry.operation}</span>
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px]">
+                            {entry.entity}
+                          </span>
+                          {entry.targetId && (
+                            <span className="text-slate-400 text-[10px]">#{entry.targetId}</span>
+                          )}
+                        </div>
+                        {entry.detail && (
+                          <div className="text-[11px] text-slate-300 truncate">{entry.detail}</div>
+                        )}
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-500 shrink-0">
+                        {entry.timestampIso.slice(11, 19)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Last 5 Failed */}
+            <div
+              data-testid="sync-logs-failed-column"
+              className="p-3.5 rounded-2xl bg-slate-950/60 border border-rose-500/25 space-y-2.5"
+            >
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-black uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+                  <XCircle className="w-4 h-4" />
+                  <span>Last 5 Failed Sync Operations</span>
+                </div>
+                <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 font-mono text-[10px] font-bold">
+                  {syncDiagLogs.last5Failed.length} / 5
+                </span>
+              </div>
+
+              {syncDiagLogs.last5Failed.length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-500 italic">
+                  0 failed cloud sync operations recorded for this rider.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {syncDiagLogs.last5Failed.map((entry) => (
+                    <div
+                      key={entry.id}
+                      data-testid={`sync-log-failed-${entry.id}`}
+                      className="p-2.5 rounded-xl bg-rose-950/20 border border-rose-500/30 text-xs flex items-start justify-between gap-2"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="font-mono font-bold text-rose-300 flex items-center gap-1.5 flex-wrap">
+                          <span>{entry.operation}</span>
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px]">
+                            {entry.entity}
+                          </span>
+                          {entry.targetId && (
+                            <span className="text-slate-400 text-[10px]">#{entry.targetId}</span>
+                          )}
+                        </div>
+                        {entry.errorMessage && (
+                          <div className="text-[11px] text-rose-200/90 font-mono break-all">
+                            {entry.errorMessage}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-[10px] font-mono text-slate-500 shrink-0">
+                        {entry.timestampIso.slice(11, 19)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
         {activeAdminTab === 'directory' ? (
           <>
             {/* KPI Stats Cards */}
@@ -1256,9 +1683,21 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         <div className="space-y-3">
           {filteredUsers.length === 0 ? (
             <div className="p-8 text-center bg-slate-900 border border-slate-800 rounded-2xl text-slate-500 space-y-2">
-              <Search className="w-8 h-8 mx-auto text-slate-600" />
-              <p className="font-bold text-sm text-slate-400">No rider accounts match this filter</p>
-              <p className="text-xs text-slate-600">Try adjusting your status filter or search query</p>
+              {allUsers.length === 0 ? (
+                <>
+                  <Users className="w-8 h-8 mx-auto text-slate-600" />
+                  <p className="font-bold text-sm text-slate-300">No registered riders in Firestore yet</p>
+                  <p className="text-xs text-slate-500">
+                    Live rider profiles and payment submissions will automatically appear here as users sign in or submit payments.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Search className="w-8 h-8 mx-auto text-slate-600" />
+                  <p className="font-bold text-sm text-slate-400">No rider accounts match this filter</p>
+                  <p className="text-xs text-slate-600">Try adjusting your status filter or search query</p>
+                </>
+              )}
             </div>
           ) : (
             filteredUsers.map((user) => {

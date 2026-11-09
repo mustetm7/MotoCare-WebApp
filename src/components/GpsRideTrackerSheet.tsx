@@ -6,6 +6,7 @@ import { sounds } from '../utils/audio';
 interface GpsRideTrackerSheetProps {
   bike: Motorcycle;
   subscription: UserSubscription;
+  hasProAccess?: boolean;
   onFinishRide: (distanceKm: number) => void;
   onClose?: () => void;
   onOpenPaywall?: () => void;
@@ -14,11 +15,16 @@ interface GpsRideTrackerSheetProps {
 export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
   bike,
   subscription,
+  hasProAccess,
   onFinishRide,
   onClose,
   onOpenPaywall,
 }) => {
-  const isPro = subscription.tier === 'pro';
+  const isPro =
+    hasProAccess ??
+    (subscription.tier === 'pro' &&
+      subscription.status === 'active' &&
+      !subscription.isExpired);
 
   // Live ride states
   const [isPaused, setIsPaused] = React.useState(false);
@@ -30,7 +36,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
 
   // Timer interval
   React.useEffect(() => {
-    if (isPaused) return;
+    if (!isPro || isPaused) return;
 
     const timer = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
@@ -45,11 +51,11 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isPaused, isSimulating]);
+  }, [isPro, isPaused, isSimulating]);
 
   // Real GPS Geolocation Watcher if not simulating
   React.useEffect(() => {
-    if (isSimulating || isPaused || !navigator.geolocation) return;
+    if (!isPro || isSimulating || isPaused || !navigator.geolocation) return;
 
     let lastCoords: { lat: number; lng: number } | null = null;
 
@@ -85,7 +91,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [isSimulating, isPaused]);
+  }, [isPro, isSimulating, isPaused]);
 
   // Format mm:ss
   const formatTime = (secs: number) => {
@@ -98,10 +104,47 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
   const previewNewOdo = bike.odometer + roundedAddedKm;
 
   const handleFinish = () => {
+    if (!isPro) {
+      onClose?.();
+      onOpenPaywall?.();
+      return;
+    }
     sounds.playSuccess();
     onFinishRide(roundedAddedKm);
     onClose?.();
   };
+
+  if (!isPro) {
+    return (
+      <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 p-6 text-center space-y-4">
+        <h3 className="text-lg font-extrabold text-slate-900">
+          Zero-Touch GPS Auto-Odometer is a Pro Feature
+        </h3>
+        <p className="text-xs text-slate-500">
+          Upgrade to MotoCare Pro (₱49/mo) to unlock live GPS ride tracking and automatic odometer updates.
+        </p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-2xl"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onClose?.();
+              onOpenPaywall?.();
+            }}
+            className="flex-1 py-2.5 text-xs font-bold text-white bg-[#FF6B00] rounded-2xl"
+          >
+            Upgrade to Pro (₱49/mo)
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 p-5 space-y-5 animate-in fade-in duration-200">

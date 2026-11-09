@@ -29,8 +29,11 @@ export interface MotorcycleSpecs {
   recommendedServiceIntervalKm: number;
 }
 
+export type TimestampSource = 'server' | 'client_pending' | 'legacy_local';
+
 export interface Motorcycle {
   id: string;
+  userId?: string;
   nickname: string;
   brand: string; // Yamaha, Honda, Suzuki, Kawasaki, Bajaj, KTM, CFMoto
   model: string; // NMAX 155, Click 125i, etc.
@@ -45,10 +48,15 @@ export interface Motorcycle {
   customColorBadge?: string; // hex code or preset
   motorcycleType?: 'Scooter / AT' | 'Underbone' | 'Backbone / Commuter' | string;
   unit?: 'km' | 'mi';
+  createdAt?: string;
+  updatedAt?: string;
+  cloudVersion?: number;
+  timestampSource?: TimestampSource;
 }
 
 export interface MaintenanceReminder {
   id: string;
+  userId?: string;
   bikeId: string;
   title: string;
   category: ServiceCategory;
@@ -62,6 +70,10 @@ export interface MaintenanceReminder {
   manualSpecNote?: string;
   customAccentColor?: string;
   estimatedCostPhp: number;
+  createdAt?: string;
+  updatedAt?: string;
+  cloudVersion?: number;
+  timestampSource?: TimestampSource;
 }
 
 export interface ServicePart {
@@ -72,7 +84,9 @@ export interface ServicePart {
 
 export interface ServiceRecord {
   id: string;
+  userId?: string;
   bikeId: string;
+  bikeLabelSnapshot?: string; // Preserves bike brand/model/plate if bike is later retired or sold
   date: string;
   odometer: number;
   title: string;
@@ -87,6 +101,10 @@ export interface ServiceRecord {
   receiptNumber?: string;
   isCasaVerified?: boolean;
   linkedReminderId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  cloudVersion?: number;
+  timestampSource?: TimestampSource;
 }
 
 export interface LtoRenewalInfo {
@@ -182,3 +200,137 @@ export interface BluetoothDevicePreset {
   connected: boolean;
   batteryLevel?: number;
 }
+
+export type CloudSyncStatus = 'synced' | 'syncing' | 'offline_cache' | 'sync_error';
+
+export type OfflineMutationEntity = 'motorcycle' | 'reminder' | 'serviceRecord';
+export type OfflineMutationAction = 'upsert' | 'update_fields' | 'delete';
+
+export type MutationFailureClassification =
+  | 'offline'
+  | 'temporary_network_error'
+  | 'permission_or_validation_error'
+  | 'quota_exceeded'
+  | 'version_conflict'
+  | 'retry_exhausted';
+
+export interface OfflineMutationItem {
+  id: string;
+  userId: string;
+  entity: OfflineMutationEntity;
+  action: OfflineMutationAction;
+  targetId: string;
+  payload?: Record<string, unknown>;
+  createdAtIso: string;
+  retryCount: number;
+  lastError?: string;
+  /**
+   * Authoritative cloud `updatedAt` ISO timestamp captured from the last synchronized
+   * Firestore document before local optimistic edits occurred.
+   * `null` when `expectedCloudAbsent === true` (newly created document).
+   */
+  baseCloudUpdatedAt?: string | null;
+  /**
+   * Authoritative transactional integer revision (`cloudVersion`) captured before local edits.
+   */
+  baseCloudVersion?: number | null;
+  /**
+   * True when the mutation was created for a new document that did not yet exist in Firestore.
+   */
+  expectedCloudAbsent?: boolean;
+  /**
+   * Optional flag marking a legacy/untrusted queue item that lacks a verified base cloud version.
+   */
+  baseVersionUntrusted?: boolean;
+  /**
+   * Monotonically incremented generation counter for this queued item whenever rapid edits coalesce.
+   * Prevents an earlier in-flight or debounced direct write from accidentally removing a newer mutation.
+   */
+  mutationGeneration?: number;
+}
+
+export interface QuarantinedMutationItem {
+  id: string;
+  userId: string;
+  entity: OfflineMutationEntity;
+  action: OfflineMutationAction;
+  targetId: string;
+  payload?: Record<string, unknown>;
+  createdAtIso: string;
+  retryCount: number;
+  lastError: string;
+  quarantinedAtIso: string;
+  failureClassification: MutationFailureClassification;
+  baseCloudUpdatedAt?: string | null;
+  baseCloudVersion?: number | null;
+  expectedCloudAbsent?: boolean;
+  baseVersionUntrusted?: boolean;
+  conflictCloudUpdatedAt?: string | null;
+  conflictCloudVersion?: number | null;
+  conflictReason?: string;
+  mutationGeneration?: number;
+}
+
+export interface SyncConflictItem<T = Motorcycle | MaintenanceReminder | ServiceRecord> {
+  id: string;
+  entity: OfflineMutationEntity;
+  targetId: string;
+  reason: 'ambiguous_odometer' | 'divergent_timestamps' | 'concurrent_edit';
+  localRecord: T;
+  cloudRecord: T;
+  detectedAtIso: string;
+}
+
+export interface MigrationLedger {
+  userId: string;
+  userEmail: string;
+  status: 'pending_confirmation' | 'in_progress' | 'completed' | 'skipped';
+  selectedBikeIds?: string[];
+  motorcyclesCompletedIds: string[];
+  remindersCompletedIds: string[];
+  serviceRecordsCompletedIds: string[];
+  bikeIdRemap: Record<string, string>;
+  backupKey: string;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+}
+
+export interface PreMigrationBackupPayload {
+  backupVersion: '1.0';
+  createdAtIso: string;
+  userId: string;
+  userEmail: string;
+  motorcycles: Motorcycle[];
+  reminders: MaintenanceReminder[];
+  serviceRecords: ServiceRecord[];
+  activeBikeId: string | null;
+}
+
+export interface LegacyMigrationDryRun {
+  userId: string;
+  userEmail: string;
+  eligibleMotorcycles: Motorcycle[];
+  eligibleReminders: MaintenanceReminder[];
+  eligibleServiceRecords: ServiceRecord[];
+  rejectedForeignUidCount: number;
+  excludedMockSampleCount: number;
+  requiresQuotaSelection: boolean;
+  maxAllowedCloudBikes: number;
+  conflictsDetected: SyncConflictItem[];
+  hasLegacyDataToReview: boolean;
+}
+
+export interface CloudSyncLogEntry {
+  id: string;
+  userId: string;
+  timestampIso: string;
+  status: 'success' | 'failed';
+  operation: string;
+  entity: OfflineMutationEntity | 'queue_flush' | 'migration';
+  targetId?: string;
+  detail?: string;
+  errorMessage?: string;
+}
+
+

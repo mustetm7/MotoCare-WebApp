@@ -9,6 +9,7 @@ interface GarageModalProps {
   onClose: () => void;
   bike: Motorcycle | null;
   subscription: UserSubscription;
+  hasProAccess?: boolean;
   existingCount: number;
   onSave: (bike: Motorcycle, selectedPreset?: PhilippineModelPreset) => void;
   onDelete?: (id: string) => void;
@@ -33,6 +34,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
   onClose,
   bike,
   subscription,
+  hasProAccess,
   existingCount,
   onSave,
   onDelete,
@@ -40,7 +42,11 @@ export const GarageModal: React.FC<GarageModalProps> = ({
   onOpenPaywall,
 }) => {
   const isEditing = !!bike;
-  const isPro = subscription.tier === 'pro';
+  const isPro =
+    hasProAccess ??
+    (subscription.tier === 'pro' &&
+      subscription.status === 'active' &&
+      !subscription.isExpired);
 
   // Form State matching screenshots
   const [brand, setBrand] = React.useState('Yamaha');
@@ -173,6 +179,11 @@ export const GarageModal: React.FC<GarageModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isEditing && !isPro && existingCount >= 1) {
+      onClose();
+      onOpenPaywall?.();
+      return;
+    }
     sounds.playSuccess();
 
     const selectedPreset = PHILIPPINE_MOTORCYCLE_PRESETS.find(

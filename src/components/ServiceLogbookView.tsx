@@ -8,6 +8,7 @@ interface ServiceLogbookViewProps {
   records: ServiceRecord[];
   bike: Motorcycle;
   subscription: UserSubscription;
+  hasProAccess?: boolean;
   onOpenAddService: () => void;
   onOpenCasaBooklet: () => void;
   onDeleteRecord: (recordId: string) => void;
@@ -18,16 +19,29 @@ interface ServiceLogbookViewProps {
 export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
   records,
   bike,
+  subscription,
+  hasProAccess,
   onOpenAddService,
   onDeleteRecord,
+  onOpenPaywall,
   onBack,
 }) => {
+  const isPro =
+    hasProAccess ??
+    (subscription.tier === 'pro' &&
+      subscription.status === 'active' &&
+      !subscription.isExpired);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [typeFilter, setTypeFilter] = React.useState<'all' | 'Casa / Official 3S' | 'Independent Shop' | 'DIY'>('all');
   const [confirmDeleteRecordId, setConfirmDeleteRecordId] = React.useState<string | null>(null);
+  const hasArchivedBikeRecords = React.useMemo(
+    () => records.some((r) => !bike?.id || r.bikeId !== bike.id),
+    [records, bike?.id]
+  );
+  const [showAllBikes, setShowAllBikes] = React.useState(false);
 
   const bikeRecords = records
-    .filter((r) => r.bikeId === bike.id)
+    .filter((r) => (!bike?.id || showAllBikes ? true : r.bikeId === bike.id))
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   const totalSpentPhp = bikeRecords.reduce((sum, r) => sum + r.totalCostPhp, 0);
@@ -49,6 +63,14 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
     return true;
   });
 
+  const handleExportCsv = () => {
+    if (!isPro) {
+      onOpenPaywall();
+      return;
+    }
+    exportCasaServiceCsv(bike, bikeRecords);
+  };
+
   return (
     <div className="space-y-5">
       {/* Top Back Navigation Bar */}
@@ -65,9 +87,24 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
           <span>Back to Schedule</span>
         </button>
 
-        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
-          History Ledger
-        </span>
+        <div className="flex items-center gap-2">
+          {bike?.id && hasArchivedBikeRecords && (
+            <button
+              type="button"
+              onClick={() => setShowAllBikes((v) => !v)}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                showAllBikes
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              {showAllBikes ? 'Showing All / Retired Bikes' : 'Include Retired Bikes'}
+            </button>
+          )}
+          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+            History Ledger
+          </span>
+        </div>
       </div>
 
       {/* Header */}
@@ -77,27 +114,35 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
             Service History
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Logbook for <strong className="text-slate-800">{bike.year} {bike.brand} {bike.model}</strong>
+            {bike?.id && !showAllBikes ? (
+              <>
+                Logbook for <strong className="text-slate-800">{bike.year} {bike.brand} {bike.model}</strong>
+              </>
+            ) : (
+              <span>Complete preserved service records across active &amp; retired motorcycles</span>
+            )}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => exportCasaServiceCsv(bike, bikeRecords)}
+            onClick={handleExportCsv}
             className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl transition-colors flex items-center gap-1 shadow-2xs"
-            title="Export CSV"
+            title={isPro ? 'Export CSV' : 'Upgrade to Pro to Export CSV'}
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">CSV</span>
+            <span className="hidden sm:inline">{isPro ? 'CSV' : 'CSV (Pro)'}</span>
           </button>
 
-          <button
-            onClick={onOpenAddService}
-            className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-xl transition-all flex items-center gap-1 shadow-sm"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Log</span>
-          </button>
+          {bike?.id && (
+            <button
+              onClick={onOpenAddService}
+              className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-xl transition-all flex items-center gap-1 shadow-sm"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Log</span>
+            </button>
+          )}
         </div>
       </div>
 

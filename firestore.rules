@@ -40,6 +40,32 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Helper to validate cloudVersion on document creation:
+    // Must exist, be an integer, and equal 1.
+    function isValidCloudVersionCreate(data) {
+      return ('cloudVersion' in data) &&
+        data.cloudVersion is int &&
+        data.cloudVersion == 1;
+    }
+
+    // Helper to validate cloudVersion on document update:
+    // - If old document has no cloudVersion (legacy document), new cloudVersion must be int 1.
+    // - If old document has a valid positive integer cloudVersion, new cloudVersion must equal old + 1.
+    // - Rejects missing, non-integer, negative/zero, unchanged, decreased, jumped, or malformed legacy versions.
+    function isValidCloudVersionUpdate(newData, oldData) {
+      return ('cloudVersion' in newData) &&
+        newData.cloudVersion is int &&
+        (
+          (!('cloudVersion' in oldData) && newData.cloudVersion == 1) ||
+          (
+            ('cloudVersion' in oldData) &&
+            oldData.cloudVersion is int &&
+            oldData.cloudVersion >= 1 &&
+            newData.cloudVersion == oldData.cloudVersion + 1
+          )
+        );
+    }
+
     // Helper to validate user profile creation:
     // Strictly enforces matching Auth UID & email, default rider role, default free tier, 0 bikeCount, and forbids privileged or phone fields.
     function isValidUserCreate(data, userId) {
@@ -170,18 +196,85 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Helper to validate Motorcycle document writes (field types, ranges, string lengths, and ID match)
+    function isValidMotorcyclePayload(data, bikeId) {
+      return data.id == bikeId &&
+        isValidId(bikeId) &&
+        data.userId == request.auth.uid &&
+        (!('odometer' in data) || (data.odometer is number && data.odometer >= 0 && data.odometer <= 2000000)) &&
+        (!('year' in data) || (data.year is number && data.year >= 1950 && data.year <= 2100)) &&
+        (!('brand' in data) || (data.brand is string && data.brand.size() > 0 && data.brand.size() <= 100)) &&
+        (!('model' in data) || (data.model is string && data.model.size() > 0 && data.model.size() <= 100)) &&
+        (!('nickname' in data) || (data.nickname is string && data.nickname.size() <= 100)) &&
+        (!('licensePlate' in data) || (data.licensePlate is string && data.licensePlate.size() <= 32));
+    }
+
+    // Helper to validate MaintenanceReminder writes (ID match, parent motorcycle ownership via single get(), ranges, and string bounds)
+    function isValidReminderPayload(data, reminderId) {
+      return data.id == reminderId &&
+        isValidId(reminderId) &&
+        data.userId == request.auth.uid &&
+        data.bikeId is string &&
+        isValidId(data.bikeId) &&
+        get(/databases/$(database)/documents/motorcycles/$(data.bikeId)).data.userId == request.auth.uid &&
+        data.title is string &&
+        data.title.size() > 0 &&
+        data.title.size() <= 200 &&
+        data.intervalKm is number &&
+        data.intervalKm > 0 &&
+        data.intervalKm <= 500000 &&
+        data.nextDueOdo is number &&
+        data.nextDueOdo >= 0 &&
+        data.nextDueOdo <= 2000000 &&
+        (!('lastCompletedOdo' in data) || (data.lastCompletedOdo is number && data.lastCompletedOdo >= 0 && data.lastCompletedOdo <= 2000000)) &&
+        (!('estimatedCostPhp' in data) || (data.estimatedCostPhp is number && data.estimatedCostPhp >= 0 && data.estimatedCostPhp <= 10000000)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
+        (!('manualSpecNote' in data) || (data.manualSpecNote is string && data.manualSpecNote.size() <= 500));
+    }
+
+    // Helper to validate ServiceRecord writes (ID match, parent motorcycle ownership when active or retired, ranges, string lengths, and parts list bounds)
+    function isValidServiceRecordPayload(data, recordId) {
+      return data.id == recordId &&
+        isValidId(recordId) &&
+        data.userId == request.auth.uid &&
+        data.bikeId is string &&
+        isValidId(data.bikeId) &&
+        (
+          !exists(/databases/$(database)/documents/motorcycles/$(data.bikeId)) ||
+          get(/databases/$(database)/documents/motorcycles/$(data.bikeId)).data.userId == request.auth.uid
+        ) &&
+        data.title is string &&
+        data.title.size() > 0 &&
+        data.title.size() <= 200 &&
+        data.date is string &&
+        data.date.size() > 0 &&
+        data.date.size() <= 40 &&
+        data.odometer is number &&
+        data.odometer >= 0 &&
+        data.odometer <= 2000000 &&
+        data.totalCostPhp is number &&
+        data.totalCostPhp >= 0 &&
+        data.totalCostPhp <= 10000000 &&
+        (!('laborCostPhp' in data) || (data.laborCostPhp is number && data.laborCostPhp >= 0 && data.laborCostPhp <= 10000000)) &&
+        (!('parts' in data) || (data.parts is list && data.parts.size() <= 50)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
+        (!('shopName' in data) || (data.shopName is string && data.shopName.size() <= 200)) &&
+        (!('oilBrandGrade' in data) || (data.oilBrandGrade is string && data.oilBrandGrade.size() <= 200)) &&
+        (!('receiptNumber' in data) || (data.receiptNumber is string && data.receiptNumber.size() <= 100)) &&
+        (!('bikeLabelSnapshot' in data) || (data.bikeLabelSnapshot is string && data.bikeLabelSnapshot.size() <= 200));
+    }
+
     // 5. Motorcycles Collection (Enforced Quota: Free max 1 bike, Pro unlimited)
     match /motorcycles/{bikeId} {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       
-      // CREATE: Requires authenticated owner, motorcycle did not exist prior to write (!exists),
+      // CREATE: Requires authenticated owner, valid payload, cloudVersion == 1, motorcycle did not exist prior to write (!exists),
       // consistent bikeCount increment in user doc, and quota enforcement.
       allow create: if (
         isSignedIn() &&
-        request.resource.data.userId == request.auth.uid &&
-        request.resource.data.id == bikeId &&
-        isValidId(bikeId) &&
+        isValidMotorcyclePayload(request.resource.data, bikeId) &&
+        isValidCloudVersionCreate(request.resource.data) &&
         !exists(/databases/$(database)/documents/motorcycles/$(bikeId)) &&
         (
           isAdmin() ||
@@ -206,12 +299,20 @@ service cloud.firestore {
         )
       );
 
-      // UPDATE: Owner can update their existing motorcycle specs/odometer without changing ownership or bike ID.
+      // UPDATE: Owner can update their existing motorcycle specs/odometer without changing ownership or bike ID,
+      // and must increment cloudVersion (or initialize to 1 for legacy documents without cloudVersion).
+      // Preserves full access to existing motorcycles even after Pro subscription expiration.
       allow update: if (
-        isOwner(resource.data.userId) &&
-        request.resource.data.userId == resource.data.userId &&
-        request.resource.data.id == resource.data.id
-      ) || isAdmin();
+        isValidCloudVersionUpdate(request.resource.data, resource.data) &&
+        (
+          (
+            isOwner(resource.data.userId) &&
+            isValidMotorcyclePayload(request.resource.data, bikeId) &&
+            request.resource.data.userId == resource.data.userId &&
+            request.resource.data.id == resource.data.id
+          ) || isAdmin()
+        )
+      );
 
       // DELETE: Owner can delete their bike; requires motorcycle existed prior to delete (exists)
       // and atomically decrements bikeCount in user doc.
@@ -239,8 +340,21 @@ service cloud.firestore {
     match /reminders/{reminderId} {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if (isOwner(resource.data.userId) && request.resource.data.userId == resource.data.userId) || isAdmin();
+      allow create: if isSignedIn() &&
+        isValidReminderPayload(request.resource.data, reminderId) &&
+        isValidCloudVersionCreate(request.resource.data);
+      allow update: if (
+        isValidCloudVersionUpdate(request.resource.data, resource.data) &&
+        (
+          (
+            isOwner(resource.data.userId) &&
+            isValidReminderPayload(request.resource.data, reminderId) &&
+            request.resource.data.userId == resource.data.userId &&
+            request.resource.data.id == resource.data.id &&
+            request.resource.data.bikeId == resource.data.bikeId
+          ) || isAdmin()
+        )
+      );
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
 
@@ -248,8 +362,21 @@ service cloud.firestore {
     match /serviceRecords/{recordId} {
       allow get: if isOwner(resource.data.userId) || isAdmin();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if (isOwner(resource.data.userId) && request.resource.data.userId == resource.data.userId) || isAdmin();
+      allow create: if isSignedIn() &&
+        isValidServiceRecordPayload(request.resource.data, recordId) &&
+        isValidCloudVersionCreate(request.resource.data);
+      allow update: if (
+        isValidCloudVersionUpdate(request.resource.data, resource.data) &&
+        (
+          (
+            isOwner(resource.data.userId) &&
+            isValidServiceRecordPayload(request.resource.data, recordId) &&
+            request.resource.data.userId == resource.data.userId &&
+            request.resource.data.id == resource.data.id &&
+            request.resource.data.bikeId == resource.data.bikeId
+          ) || isAdmin()
+        )
+      );
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
   }
