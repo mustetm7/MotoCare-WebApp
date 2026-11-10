@@ -27,6 +27,7 @@ import { GarageModal } from '../src/components/GarageModal';
 import { GpsRideTrackerSheet } from '../src/components/GpsRideTrackerSheet';
 import { ServiceLogbookView } from '../src/components/ServiceLogbookView';
 import { CasaBookletModal } from '../src/components/CasaBookletModal';
+import { PaywallModal } from '../src/components/PaywallModal';
 
 vi.mock('../src/context/AuthContext', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/context/AuthContext')>();
@@ -838,4 +839,106 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
     expect(entitlement.isActivePaidProSubscriber).toBe(false);
     expect(entitlement.hasProAccess).toBe(false);
   });
+
+  it('Test J: GCash-only payment screen displays verified GCash QR code, ₱49 amount, Save QR Image, and submits GCash reference', async () => {
+    const ordinaryRider = {
+      uid: 'rider-gcash-test',
+      email: 'rider@example.com',
+      displayName: 'Juan Rider',
+      emailVerified: true,
+    };
+    const freeSub = computeAuthoritativeSubscription(
+      { subscriptionTier: 'free', subscriptionStatus: 'free' },
+      null
+    );
+
+    vi.mocked(AuthContextModule.useAuth).mockReturnValue({
+      user: ordinaryRider as any,
+      loading: false,
+      isAdmin: false,
+      hasProAccess: false,
+      subscription: freeSub,
+      submitPaymentRef: vi.fn().mockResolvedValue('pay_gcash_123'),
+      signIn: vi.fn(),
+      signInWithEmail: vi.fn(),
+      signUpWithEmail: vi.fn(),
+      resetPassword: vi.fn(),
+      signOut: vi.fn(),
+    });
+
+    const onSubmitReferenceMock = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PaywallModal
+        isOpen={true}
+        onClose={vi.fn()}
+        subscription={freeSub}
+        onSubmitReference={onSubmitReferenceMock}
+        onCancelSubscription={vi.fn()}
+      />
+    );
+
+    // 1. GoTyme is completely absent from customer-facing PaywallModal
+    expect(screen.queryByText(/GoTyme/i)).toBeNull();
+
+    // Verify 'Upgrade Tips' section highlighting Unlimited Bike Storage and Advanced Ride Tracking Statistics
+    expect(screen.getByText('Upgrade Tips')).not.toBeNull();
+    expect(screen.getAllByText('Unlimited Bike Storage').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Advanced Ride Tracking Statistics').length).toBeGreaterThan(0);
+
+    // 2. Click "Pay with GCash (₱49/month)" button to open the QR code view
+    const payWithGcashBtn = screen.getByText('Pay with GCash (₱49/month)');
+    fireEvent.click(payWithGcashBtn);
+
+    // 3. Verify only GCash appears and the verified GCash QR code image is displayed
+    expect(screen.queryByText(/GoTyme/i)).toBeNull();
+    const qrImg = screen.getByAltText('Official GCash QR Code') as HTMLImageElement;
+    expect(qrImg).not.toBeNull();
+    expect(qrImg.getAttribute('src')).toBe('/assets/aistudio/gcash_37c30549.jpg');
+
+    // Verify hidden download anchor and Download QR Code button
+    expect(screen.getByTestId('hidden-gcash-qr-download-anchor')).not.toBeNull();
+    const downloadQrCodeBtn = screen.getByRole('button', { name: /Download QR Code/i });
+    expect(downloadQrCodeBtn).not.toBeNull();
+    fireEvent.click(downloadQrCodeBtn);
+    expect(screen.getByText('GCash QR image downloaded to your device')).not.toBeNull();
+
+    // Verify 'Scan GCash QR' camera button opens the camera scanner panel
+    const scanGcashQrBtn = screen.getByRole('button', { name: /Scan GCash QR/i });
+    expect(scanGcashQrBtn).not.toBeNull();
+    fireEvent.click(scanGcashQrBtn);
+    expect(screen.getByTestId('gcash-qr-camera-scanner')).not.toBeNull();
+
+    // Verify 'Verification Status' progress bar shows Submitted -> Verifying -> Approved/Rejected
+    const progressBar = screen.getByTestId('verification-status-progress-bar');
+    expect(progressBar).not.toBeNull();
+    expect(screen.getByText('1. Submitted')).not.toBeNull();
+    expect(screen.getByText('2. Verifying')).not.toBeNull();
+    expect(screen.getByText('3. Approved/Rejected')).not.toBeNull();
+
+    // 4. Verify ₱49.00 amount, Save QR Image button, Copy to Clipboard button, and simple payment instructions
+    expect(screen.getAllByText('₱49.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Save QR Image').length).toBeGreaterThan(0);
+    expect(screen.getByText('How to Pay with GCash:')).not.toBeNull();
+
+    const copyBtn = screen.getByRole('button', { name: /Copy to Clipboard/i });
+    expect(copyBtn).not.toBeNull();
+    fireEvent.click(copyBtn);
+    expect(screen.getByText('Copied!')).not.toBeNull();
+
+    // 5. Enter GCash reference number and submit for admin verification
+    const refInput = screen.getByPlaceholderText(/Enter GCash Ref No/i);
+    fireEvent.change(refInput, { target: { value: '9001827364512' } });
+
+    const submitBtn = screen.getByText(/Submit Reference for Admin Verification/i);
+    fireEvent.click(submitBtn);
+
+    expect(onSubmitReferenceMock).toHaveBeenCalledWith('gcash', '9001827364512');
+
+    // 6. Verify toast notification triggers with confirmation and typical verification timeframe, and progress bar advances to Verifying (66%)
+    const toastStatus = await screen.findByRole('status');
+    expect(toastStatus.textContent).toContain('GCash Payment Reference Submitted!');
+    expect(toastStatus.textContent).toContain('within 5–15 minutes');
+    expect(progressBar.getAttribute('aria-valuenow')).toBe('66');
+  });
 });
+

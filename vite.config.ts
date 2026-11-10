@@ -12,7 +12,14 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         injectRegister: false,
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+        includeAssets: [
+          'favicon.ico',
+          'apple-touch-icon.png',
+          'logo.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'assets/aistudio/gcash_37c30549.jpg',
+        ],
         manifest: {
           id: '/',
           name: 'MotoCare - Motorcycle Maintenance',

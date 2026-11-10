@@ -36,6 +36,8 @@ import {
   AlertTriangle,
   Activity,
   Database,
+  Bell,
+  History,
 } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import confetti from 'canvas-confetti';
@@ -68,6 +70,13 @@ import {
   getCloudSyncOperationLogs,
   clearCloudSyncOperationLogs,
 } from '../utils/storage';
+import {
+  isProExpiredWithinLast7Days,
+  getRecentlyExpiredProUsers,
+  triggerRenewalReminderNotification,
+  triggerRecentExpiryRenewalReminders,
+  RenewalReminderResult,
+} from '../utils/subscription';
 
 interface AdminUsersPortalProps {
   users: UserAccount[];
@@ -421,8 +430,11 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [confirmExecuteTimestamps, setConfirmExecuteTimestamps] = useState(false);
   const [portalToast, setPortalToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  // Admin Navigation: 'directory' for rider subscriptions list, 'system_health' for System Health section
-  const [activeAdminTab, setActiveAdminTab] = useState<'directory' | 'system_health'>('directory');
+  // Admin Navigation: 'directory' for rider subscriptions list, 'payment_history' for audit trail, 'system_health' for System Health section
+  const [activeAdminTab, setActiveAdminTab] = useState<'directory' | 'payment_history' | 'system_health'>('directory');
+  const [paymentHistoryFilter, setPaymentHistoryFilter] = useState<'all' | 'approved' | 'rejected'>('all');
+  const [paymentHistorySearch, setPaymentHistorySearch] = useState('');
+  const [sentRenewalReminders, setSentRenewalReminders] = useState<Record<string, RenewalReminderResult>>({});
   const [healthCounterReport, setHealthCounterReport] = useState<CounterHealthSummaryReport | null>(null);
   const [healthExpiryReport, setHealthExpiryReport] = useState<ExpiryDateDiagnosticReport | null>(null);
   const [isLoadingHealth, setIsLoadingHealth] = useState(false);
@@ -612,7 +624,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [newEmail, setNewEmail] = useState('');
   const [newBikeModel, setNewBikeModel] = useState('');
   const [newBikePlate, setNewBikePlate] = useState('');
-  const [newPaymentMethod, setNewPaymentMethod] = useState<'gcash' | 'gotyme'>('gcash');
+  const newPaymentMethod: 'gcash' = 'gcash';
   const [newRefNumber, setNewRefNumber] = useState('');
   const [newInitialStatus, setNewInitialStatus] = useState<AccountPaymentStatus>('pending_approval');
   const [newNotes, setNewNotes] = useState('');
@@ -832,6 +844,142 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
     sounds.playClick();
     setTimeout(() => setCopiedRefId(null), 2000);
   };
+
+  // Identify users whose Pro subscription expired in the last 7 days
+  const recentlyExpiredProUsers = React.useMemo(
+    () => getRecentlyExpiredProUsers(allUsers),
+    [allUsers]
+  );
+
+  // Manual override handler to trigger Renewal Reminders for all users expired in the last 7 days
+  const handleManualOverrideAllRenewalReminders = () => {
+    const report = triggerRecentExpiryRenewalReminders(allUsers, { manualOverride: true });
+    if (report.notifications.length > 0) {
+      setSentRenewalReminders((prev) => {
+        const next = { ...prev };
+        report.notifications.forEach((n) => {
+          next[n.userId] = n;
+        });
+        return next;
+      });
+    }
+    setPortalToast({
+      msg: report.summaryMessage,
+      type: report.expiredUsers.length > 0 ? 'success' : 'info',
+    });
+  };
+
+  // Manual override handler to trigger a Renewal Reminder for a specific user
+  const handleManualOverrideSingleRenewalReminder = (targetUser: UserAccount) => {
+    const res = triggerRenewalReminderNotification(targetUser, { manualOverride: true });
+    setSentRenewalReminders((prev) => ({
+      ...prev,
+      [targetUser.id]: res,
+    }));
+    setPortalToast({
+      msg: `Renewal Reminder sent to ${targetUser.name} (${targetUser.email || targetUser.id}).`,
+      type: 'success',
+    });
+  };
+
+  // Compile Payment History audit records (previously approved and rejected payment reference numbers)
+  const paymentHistoryRecords = React.useMemo(() => {
+    const records: Array<{
+      id: string;
+      userId: string;
+      userName: string;
+      userEmail: string;
+      bikeModel: string;
+      paymentMethod: string;
+      referenceNumber: string;
+      amountPhp: number;
+      auditStatus: 'approved' | 'rejected';
+      submittedAt?: string;
+      reviewedAt?: string;
+      reviewedBy?: string;
+      notes?: string;
+    }> = [];
+    const seenKeys = new Set<string>();
+
+    // 1. Live Firestore paymentSubmissions that have been approved (active_pro) or rejected
+    firestoreSubmissions.forEach((sub) => {
+      if ((sub.status === 'active_pro' || sub.status === 'rejected') && sub.referenceNumber) {
+        const key = `${sub.userId}_${sub.referenceNumber.trim().toUpperCase()}`;
+        seenKeys.add(key);
+        records.push({
+          id: sub.id,
+          userId: sub.userId,
+          userName: sub.userName || 'Rider',
+          userEmail: sub.userEmail || '',
+          bikeModel: sub.bikeModel || 'Motorcycle',
+          paymentMethod: sub.paymentMethod || 'gcash',
+          referenceNumber: sub.referenceNumber,
+          amountPhp: sub.amountPhp || 49,
+          auditStatus: sub.status === 'active_pro' ? 'approved' : 'rejected',
+          submittedAt: sub.submittedAt,
+          reviewedAt: sub.approvedAt || sub.reviewedAt || sub.submittedAt,
+          reviewedBy: sub.approvedBy || sub.reviewedBy || 'Owner Admin',
+          notes: sub.notes,
+        });
+      }
+    });
+
+    // 2. Fallback/supplement from merged allUsers and passed users prop
+    const combinedUsers = [...allUsers, ...(users || [])];
+    combinedUsers.forEach((u) => {
+      const isApprovedRecord =
+        u.paymentStatus === 'active_pro' ||
+        Boolean(u.approvedAt) ||
+        u.effectiveStatus === 'ACTIVE';
+      const isRejectedRecord =
+        u.paymentStatus === 'rejected' || u.effectiveStatus === 'REJECTED';
+
+      if ((isApprovedRecord || isRejectedRecord) && u.referenceNumber) {
+        const key = `${u.id}_${u.referenceNumber.trim().toUpperCase()}`;
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+
+        records.push({
+          id: u.lastPaymentId || `hist_${u.id}_${u.referenceNumber}`,
+          userId: u.id,
+          userName: u.name || 'Rider',
+          userEmail: u.email || '',
+          bikeModel: u.bikeModel || 'Motorcycle',
+          paymentMethod: u.paymentMethod || 'gcash',
+          referenceNumber: u.referenceNumber,
+          amountPhp: u.amountPhp || 49,
+          auditStatus: isRejectedRecord ? 'rejected' : 'approved',
+          submittedAt: u.lastPaymentDate || u.registeredAt,
+          reviewedAt: u.approvedAt || u.lastPaymentDate || u.registeredAt,
+          reviewedBy: u.approvedBy || 'Owner Admin',
+          notes: u.notes,
+        });
+      }
+    });
+
+    return records.sort((a, b) => {
+      const tA = a.reviewedAt ? new Date(a.reviewedAt).getTime() : 0;
+      const tB = b.reviewedAt ? new Date(b.reviewedAt).getTime() : 0;
+      return tB - tA;
+    });
+  }, [firestoreSubmissions, allUsers, users]);
+
+  const filteredPaymentHistory = React.useMemo(() => {
+    return paymentHistoryRecords.filter((rec) => {
+      if (paymentHistoryFilter === 'approved' && rec.auditStatus !== 'approved') return false;
+      if (paymentHistoryFilter === 'rejected' && rec.auditStatus !== 'rejected') return false;
+      if (paymentHistorySearch.trim()) {
+        const q = paymentHistorySearch.toLowerCase();
+        return (
+          rec.referenceNumber.toLowerCase().includes(q) ||
+          rec.userName.toLowerCase().includes(q) ||
+          rec.userEmail.toLowerCase().includes(q) ||
+          rec.paymentMethod.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [paymentHistoryRecords, paymentHistoryFilter, paymentHistorySearch]);
 
   // Step 1: Click "Approve PRO" -> Calculate resulting expiration date and show confirmation modal
   const handleInitiateApprove = (user: UserAccount) => {
@@ -1177,6 +1325,22 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
             <button
               type="button"
+              onClick={() => setActiveAdminTab('payment_history')}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                activeAdminTab === 'payment_history'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
+                  : 'bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              <History className="w-4 h-4 text-emerald-400" />
+              <span>Payment History</span>
+              <span className="ml-1 px-1.5 py-0.5 rounded bg-slate-950/50 text-[10px] font-mono">
+                {paymentHistoryRecords.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 setActiveAdminTab('system_health');
                 if (!healthCounterReport && !isLoadingHealth) {
@@ -1198,6 +1362,22 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
               ) : (
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
               )}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              data-testid="manual-renewal-reminder-override-btn"
+              onClick={handleManualOverrideAllRenewalReminders}
+              className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+              title="Identify users whose Pro subscription expired in the last 7 days and trigger a Renewal Reminder notification"
+            >
+              <Bell className="w-3.5 h-3.5 text-amber-400" />
+              <span>Send Renewal Reminders (7d Expired)</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-black font-mono">
+                {recentlyExpiredProUsers.length}
+              </span>
             </button>
           </div>
 
@@ -1855,8 +2035,25 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                         <div className="text-xs text-slate-500 italic">No payment record</div>
                       )}
 
-                      {/* Approval / Revoke Actions with Double-Click Protection */}
-                      <div className="flex items-center gap-2">
+                       {/* Approval / Revoke / Manual Renewal Reminder Override Actions */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {(isExpired || isProExpiredWithinLast7Days(user)) && (
+                          <button
+                            type="button"
+                            data-testid={`send-renewal-reminder-${user.id}`}
+                            onClick={() => handleManualOverrideSingleRenewalReminder(user)}
+                            className="px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                            title="Manual Override: Trigger Renewal Reminder notification for this rider"
+                          >
+                            <Bell className="w-3.5 h-3.5 text-amber-400" />
+                            <span>
+                              {sentRenewalReminders[user.id]
+                                ? 'Reminder Sent ✓'
+                                : 'Renewal Reminder'}
+                            </span>
+                          </button>
+                        )}
+
                         {isPending ? (
                           <button
                             type="button"
@@ -1899,7 +2096,161 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           )}
         </div>
       </>
-    ) : (
+    ) : null}
+
+    {(activeAdminTab === 'directory' || activeAdminTab === 'payment_history') && (
+      /* ======================================================== */
+      /* PAYMENT HISTORY AUDIT SECTION (APPROVED & REJECTED REFS) */
+      /* ======================================================== */
+      <section
+        data-testid="admin-payment-history-section"
+        className="p-5 bg-slate-900 border border-slate-800 rounded-3xl space-y-4 shadow-xl"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 rounded-2xl">
+              <History className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm sm:text-base font-black text-white">
+                  Payment History
+                </h2>
+                <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono text-[10px] font-bold uppercase">
+                  Audit Log • {paymentHistoryRecords.length} Reference{paymentHistoryRecords.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                Complete audit record of all previously approved and rejected payment reference numbers.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPaymentHistoryFilter('all')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  paymentHistoryFilter === 'all'
+                    ? 'bg-[#FF6B00] text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                All ({paymentHistoryRecords.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentHistoryFilter('approved')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  paymentHistoryFilter === 'approved'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-emerald-400 hover:bg-slate-800'
+                }`}
+              >
+                Approved ({paymentHistoryRecords.filter((r) => r.auditStatus === 'approved').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentHistoryFilter('rejected')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  paymentHistoryFilter === 'rejected'
+                    ? 'bg-rose-600 text-white'
+                    : 'text-rose-400 hover:bg-slate-800'
+                }`}
+              >
+                Rejected ({paymentHistoryRecords.filter((r) => r.auditStatus === 'rejected').length})
+              </button>
+            </div>
+
+            <div className="relative w-full sm:w-56">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                value={paymentHistorySearch}
+                onChange={(e) => setPaymentHistorySearch(e.target.value)}
+                placeholder="Search reference # or rider..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-[#FF6B00]"
+              />
+            </div>
+          </div>
+        </div>
+
+        {filteredPaymentHistory.length === 0 ? (
+          <div className="py-8 text-center text-xs text-slate-500 italic bg-slate-950/40 rounded-2xl border border-slate-800/60">
+            No previously approved or rejected payment reference numbers match the current filter.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+            {filteredPaymentHistory.map((item) => (
+              <div
+                key={item.id}
+                data-testid={`payment-history-row-${item.referenceNumber}`}
+                className={`p-3.5 rounded-2xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  item.auditStatus === 'approved'
+                    ? 'bg-emerald-950/15 border-emerald-500/25'
+                    : 'bg-rose-950/15 border-rose-500/25'
+                }`}
+              >
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono font-black text-amber-300 text-sm">
+                      {item.referenceNumber}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyRef(item.referenceNumber, `hist-${item.id}`)}
+                      className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                      title="Copy reference number"
+                    >
+                      {copiedRefId === `hist-${item.id}` ? (
+                        <Check className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                    </button>
+                    {item.auditStatus === 'approved' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-black text-[10px] uppercase tracking-wider flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>APPROVED</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 font-black text-[10px] uppercase tracking-wider flex items-center gap-1">
+                        <XCircle className="w-3 h-3" />
+                        <span>REJECTED</span>
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px] uppercase">
+                      {item.paymentMethod} • ₱{item.amountPhp}.00
+                    </span>
+                  </div>
+
+                  <div className="text-[11px] text-slate-300 flex flex-wrap items-center gap-2">
+                    <span className="font-bold text-white">{item.userName}</span>
+                    {item.userEmail && <span className="text-slate-400">({item.userEmail})</span>}
+                    <span className="text-slate-600">•</span>
+                    <span className="text-slate-400">{item.bikeModel}</span>
+                    <span className="text-slate-600">•</span>
+                    <span className="font-mono text-[10px] text-slate-500">UID: {item.userId}</span>
+                  </div>
+                </div>
+
+                <div className="text-left sm:text-right shrink-0 space-y-0.5 text-[10px] text-slate-400 font-mono">
+                  <div>
+                    Reviewed: <span className="text-slate-200">{formatManilaDateString(item.reviewedAt)}</span>
+                  </div>
+                  <div>
+                    By: <span className="text-slate-300">{item.reviewedBy || 'Owner Admin'}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    )}
+
+    {activeAdminTab === 'system_health' && (
       /* ======================================================== */
       /* SYSTEM HEALTH & INTEGRITY DIAGNOSTIC VIEW                */
       /* ======================================================== */
