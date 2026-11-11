@@ -611,3 +611,64 @@ export function generateOemSchedule(
 
   return reminders;
 }
+
+/**
+ * Synthesizes a PhilippineModelPreset for a custom-registered motorcycle
+ * so that custom motorcycles receive tailored default maintenance reminders
+ * matching their transmission, displacement, and cooling specs.
+ */
+export function buildPresetFromCustomMotorcycle(bike: {
+  brand: string;
+  model: string;
+  year: number;
+  motorcycleType?: string;
+  specs?: {
+    transmission?: TransmissionType;
+    cooling?: EngineCooling;
+    displacementCc?: number;
+    oilViscosity?: string;
+    oilCapacityLiters?: number;
+    gearOilCapacityMl?: number;
+    tirePressureFrontPsi?: number;
+    tirePressureRearPsi?: number;
+    recommendedServiceIntervalKm?: number;
+  };
+}): PhilippineModelPreset {
+  const cc = Number(bike.specs?.displacementCc) || 150;
+  const rawType = (bike.motorcycleType || '').toLowerCase();
+  const transmission: TransmissionType =
+    bike.specs?.transmission ||
+    (rawType.includes('scooter')
+      ? 'Automatic Scooter'
+      : rawType.includes('underbone')
+      ? 'Semi-Auto Underbone'
+      : 'Manual');
+  const cooling: EngineCooling =
+    bike.specs?.cooling || (cc >= 150 ? 'Liquid-Cooled' : 'Air-Cooled');
+  const isScooter = transmission === 'Automatic Scooter';
+
+  return {
+    brand: bike.brand || 'Custom',
+    model: bike.model || 'Motorcycle',
+    year: Number(bike.year) || new Date().getFullYear(),
+    transmission,
+    cooling,
+    displacementCc: cc,
+    oilViscosity:
+      bike.specs?.oilViscosity ||
+      (isScooter ? '10W-40 JASO MB' : '10W-40 JASO MA2'),
+    oilCapacityLiters:
+      bike.specs?.oilCapacityLiters ||
+      (cc >= 400 ? 2.4 : cc >= 200 ? 1.4 : 0.9),
+    gearOilCapacityMl: isScooter
+      ? bike.specs?.gearOilCapacityMl || 150
+      : undefined,
+    tirePressureFrontPsi: bike.specs?.tirePressureFrontPsi || 29,
+    tirePressureRearPsi: bike.specs?.tirePressureRearPsi || 33,
+    chainSlackMm: isScooter ? undefined : '25 - 35 mm',
+    recommendedServiceIntervalKm:
+      bike.specs?.recommendedServiceIntervalKm || 3000,
+    description: `Custom registered ${bike.brand} ${bike.model} (${cc}cc).`,
+  };
+}
+

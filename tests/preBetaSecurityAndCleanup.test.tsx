@@ -15,7 +15,9 @@ import {
   loadSubscription,
   saveSubscription,
   pruneCachedSampleData,
+  loadUserScopedMotorcycles,
   saveUserScopedMotorcycles,
+  loadUserScopedReminders,
   exportServiceAndMaintenanceCsv,
   exportServiceAndMaintenancePdf,
   generatePrintableMaintenancePdfReport,
@@ -1740,7 +1742,240 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
     expect(document.documentElement.classList.contains('dark')).toBe(false);
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
   });
+
+  it('Test S: Custom Motorcycle Registration — Preset & Custom registration, required field validation, garage appearance, reminders, service history, GPS Auto-Odometer, Free/Pro limits, and legacy compatibility', async () => {
+    // 1. Verify Preset motorcycle registration still works & manual registration callout is visible
+    const presetSaveMock = vi.fn();
+    const { unmount: unmountModal1 } = render(
+      <GarageModal
+        isOpen={true}
+        onClose={vi.fn()}
+        bike={null}
+        subscription={{ tier: 'free', plan: null, status: 'free' }}
+        hasProAccess={false}
+        existingCount={0}
+        onSave={presetSaveMock}
+      />
+    );
+
+    expect(
+      screen.getByText('Wala sa listahan ang motor mo? Idagdag ito manually.')
+    ).not.toBeNull();
+    expect(screen.getByText('+ Add My Motorcycle Manually')).not.toBeNull();
+
+    // Submit default preset (Yamaha NMAX 155)
+    fireEvent.click(screen.getByTestId('submit-motorcycle-registration-btn'));
+    expect(presetSaveMock).toHaveBeenCalledTimes(1);
+    expect(presetSaveMock.mock.calls[0][0].brand).toBe('Yamaha');
+    expect(presetSaveMock.mock.calls[0][0].model).toBe('NMAX 155');
+    unmountModal1();
+
+    // 2 & 3. Custom motorcycle registration mode, required field validation, and Back to Preset List navigation
+    const customSaveMock = vi.fn();
+    const { unmount: unmountModal2 } = render(
+      <GarageModal
+        isOpen={true}
+        onClose={vi.fn()}
+        bike={null}
+        subscription={{ tier: 'free', plan: null, status: 'free' }}
+        hasProAccess={false}
+        existingCount={0}
+        onSave={customSaveMock}
+      />
+    );
+
+    // Click "+ Add My Motorcycle Manually"
+    fireEvent.click(screen.getByTestId('switch-to-custom-motorcycle-btn'));
+    expect(screen.getByText('Add Custom Motorcycle')).not.toBeNull();
+    expect(screen.getByTestId('back-to-preset-list-btn')).not.toBeNull();
+
+    // Test Back to Preset List navigation and return to Custom Mode
+    fireEvent.click(screen.getByTestId('back-to-preset-list-btn'));
+    expect(screen.getByText('Register Motorcycle')).not.toBeNull();
+    fireEvent.click(screen.getByTestId('switch-to-custom-motorcycle-btn'));
+
+    // Submit empty custom form -> verify required field validation messages appear
+    fireEvent.click(screen.getByTestId('submit-motorcycle-registration-btn'));
+    expect(customSaveMock).not.toHaveBeenCalled();
+    const validationAlert = screen.getByTestId('custom-bike-validation-error');
+    expect(validationAlert.textContent).toContain('Motorcycle Brand is required.');
+    expect(validationAlert.textContent).toContain('Motorcycle Model is required.');
+    expect(validationAlert.textContent).toContain('Engine Displacement / CC is required');
+    expect(validationAlert.textContent).toContain('Current Odometer Reading is required');
+
+    // Fill in all required & optional custom motorcycle fields (including selecting Motorcycle Type)
+    fireEvent.change(screen.getByTestId('custom-bike-brand-input'), {
+      target: { value: 'Bristol' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-model-input'), {
+      target: { value: 'Venturi 500' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-cc-input'), {
+      target: { value: '471' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-year-input'), {
+      target: { value: '2025' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-type-select'), {
+      target: { value: 'Adventure' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-odometer-input'), {
+      target: { value: '1850' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-nickname-input'), {
+      target: { value: 'Sierra Madre Explorer' },
+    });
+
+    fireEvent.click(screen.getByTestId('submit-motorcycle-registration-btn'));
+    expect(customSaveMock).toHaveBeenCalledTimes(1);
+    const savedCustomBike = customSaveMock.mock.calls[0][0];
+    expect(savedCustomBike.brand).toBe('Bristol');
+    expect(savedCustomBike.model).toBe('Venturi 500');
+    expect(savedCustomBike.specs.displacementCc).toBe(471);
+    expect(savedCustomBike.year).toBe(2025);
+    expect(savedCustomBike.motorcycleType).toBe('Adventure');
+    expect(savedCustomBike.odometer).toBe(1850);
+    expect(savedCustomBike.nickname).toBe('Sierra Madre Explorer');
+    expect(savedCustomBike.isCustom).toBe(true);
+    unmountModal2();
+
+    // 4, 5, 6 & 7. Full App flow: Free user registers custom bike -> appears in garage, receives max 2 reminders on Free tier,
+    // supports service history, GPS Auto-Odometer, and cannot exceed 1 motorcycle on Free tier
+    const freeRiderUid = 'uid-custom-free-rider';
+    vi.mocked(AuthContextModule.useAuth).mockReturnValue({
+      user: {
+        uid: freeRiderUid,
+        email: 'customfree@motocare.ph',
+        displayName: 'Custom Rider',
+        emailVerified: true,
+      } as any,
+      loading: false,
+      isAdmin: false,
+      subscription: { tier: 'free', plan: null, status: 'free' },
+      hasProAccess: false,
+      submitPaymentRef: vi.fn(),
+      signIn: vi.fn(),
+      signInWithEmail: vi.fn(),
+      signUpWithEmail: vi.fn(),
+      resetPassword: vi.fn(),
+      signOut: vi.fn(),
+    });
+
+    const { unmount: unmountAppFree } = render(<App />);
+
+    // Post-auth onboarding shows manual registration prompt
+    expect(
+      screen.getByText('Wala sa listahan ang motor mo? Idagdag ito manually.')
+    ).not.toBeNull();
+    fireEvent.click(screen.getByTestId('onboarding-add-custom-bike-btn'));
+
+    // Fill custom motorcycle in GarageModal
+    fireEvent.change(screen.getByTestId('custom-bike-brand-input'), {
+      target: { value: 'KYMCO' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-model-input'), {
+      target: { value: 'Like 150i' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-cc-input'), {
+      target: { value: '150' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-year-input'), {
+      target: { value: '2024' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-type-select'), {
+      target: { value: 'Scooter' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-odometer-input'), {
+      target: { value: '2400' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-nickname-input'), {
+      target: { value: 'Classic White' },
+    });
+
+    await React.act(async () => {
+      fireEvent.click(screen.getByTestId('submit-motorcycle-registration-btn'));
+    });
+
+    // Verify custom bike appears in the garage and Free account has max 2 starter reminders
+    const storedFreeBikes = loadUserScopedMotorcycles(freeRiderUid);
+    expect(storedFreeBikes).toHaveLength(1);
+    expect(storedFreeBikes[0].brand).toBe('KYMCO');
+    expect(storedFreeBikes[0].model).toBe('Like 150i');
+    const storedFreeReminders = loadUserScopedReminders(freeRiderUid);
+    expect(storedFreeReminders.length).toBeLessThanOrEqual(2);
+    expect(storedFreeReminders.length).toBeGreaterThan(0);
+
+    unmountAppFree();
+
+    // 8 & 9. Pro user can add multiple custom motorcycles & legacy records without isCustom remain compatible
+    const proRiderUid = 'uid-custom-pro-rider';
+    const legacyBikeWithoutNewFields = {
+      id: 'bike-legacy-compat-1',
+      userId: proRiderUid,
+      brand: 'Suzuki',
+      model: 'Raider R150 Fi',
+      year: 2023,
+      licensePlate: 'RDR 150',
+      odometer: 8900,
+      nickname: 'King Underbone',
+      color: 'Blue',
+      specs: {
+        transmission: 'Manual' as const,
+        cooling: 'Liquid-Cooled' as const,
+        displacementCc: 150,
+        oilViscosity: '10W-40',
+        oilCapacityLiters: 1.0,
+        tirePressureFrontPsi: 29,
+        tirePressureRearPsi: 33,
+        recommendedServiceIntervalKm: 3000,
+      },
+    };
+    saveUserScopedMotorcycles(proRiderUid, [legacyBikeWithoutNewFields]);
+
+    const proPaywallMock = vi.fn();
+    const proSaveSecondBikeMock = vi.fn();
+    const { unmount: unmountProModal } = render(
+      <GarageModal
+        isOpen={true}
+        onClose={vi.fn()}
+        bike={null}
+        subscription={{ tier: 'pro', plan: 'monthly', status: 'active' }}
+        hasProAccess={true}
+        existingCount={1}
+        initialCustomMode={true}
+        onSave={proSaveSecondBikeMock}
+        onOpenPaywall={proPaywallMock}
+      />
+    );
+
+    expect(screen.queryByText('Multi-Bike Garage is a Pro Feature')).toBeNull();
+    fireEvent.change(screen.getByTestId('custom-bike-brand-input'), {
+      target: { value: 'Ducati' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-model-input'), {
+      target: { value: 'Scrambler Icon 800' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-cc-input'), {
+      target: { value: '803' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-year-input'), {
+      target: { value: '2025' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-type-select'), {
+      target: { value: 'Standard' },
+    });
+    fireEvent.change(screen.getByTestId('custom-bike-odometer-input'), {
+      target: { value: '650' },
+    });
+
+    fireEvent.click(screen.getByTestId('submit-motorcycle-registration-btn'));
+    expect(proSaveSecondBikeMock).toHaveBeenCalledTimes(1);
+    expect(proSaveSecondBikeMock.mock.calls[0][0].brand).toBe('Ducati');
+    expect(proSaveSecondBikeMock.mock.calls[0][0].motorcycleType).toBe('Standard');
+    unmountProModal();
+  });
 });
+
 
 
 

@@ -31,11 +31,20 @@ export interface MotorcycleSpecs {
 
 export type TimestampSource = 'server' | 'client_pending' | 'legacy_local';
 
+export type CustomMotorcycleType =
+  | 'Scooter'
+  | 'Underbone'
+  | 'Manual'
+  | 'Sport Bike'
+  | 'Standard'
+  | 'Adventure'
+  | 'Other';
+
 export interface Motorcycle {
   id: string;
   userId?: string;
   nickname: string;
-  brand: string; // Yamaha, Honda, Suzuki, Kawasaki, Bajaj, KTM, CFMoto
+  brand: string; // Yamaha, Honda, Suzuki, Kawasaki, Bajaj, KTM, CFMoto, or Custom
   model: string; // NMAX 155, Click 125i, etc.
   year: number;
   licensePlate: string; // e.g. "ND 8492" or "123ABC"
@@ -46,7 +55,8 @@ export interface Motorcycle {
   specs: MotorcycleSpecs;
   notes?: string;
   customColorBadge?: string; // hex code or preset
-  motorcycleType?: 'Scooter / AT' | 'Underbone' | 'Backbone / Commuter' | string;
+  motorcycleType?: CustomMotorcycleType | 'Scooter / AT' | 'Backbone / Commuter' | string;
+  isCustom?: boolean;
   unit?: 'km' | 'mi';
   createdAt?: string;
   updatedAt?: string;

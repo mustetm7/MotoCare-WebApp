@@ -74,7 +74,11 @@ import { PaywallModal } from './components/PaywallModal';
 import { LegacyMigrationModal } from './components/LegacyMigrationModal';
 
 import { Plus } from 'lucide-react';
-import { generateOemSchedule, PhilippineModelPreset } from './data/philippinePresets';
+import {
+  generateOemSchedule,
+  PhilippineModelPreset,
+  buildPresetFromCustomMotorcycle,
+} from './data/philippinePresets';
 import { useAuth } from './context/AuthContext';
 import {
   saveMotorcycleToFirestore,
@@ -603,6 +607,7 @@ export default function App() {
   // Modals state
   const [isQuickAddOdoOpen, setIsQuickAddOdoOpen] = React.useState(false);
   const [isGarageModalOpen, setIsGarageModalOpen] = React.useState(false);
+  const [garageModalInitialCustomMode, setGarageModalInitialCustomMode] = React.useState(false);
   const [editingBike, setEditingBike] = React.useState<Motorcycle | null>(null);
 
   const [isReminderModalOpen, setIsReminderModalOpen] = React.useState(false);
@@ -846,17 +851,40 @@ export default function App() {
       timestampSource: 'client_pending',
     };
 
-    const oemReminders: MaintenanceReminder[] =
-      !exists && selectedPreset
-        ? generateOemSchedule(bike.id, selectedPreset, bike.odometer).map((r, idx) => ({
-            ...r,
-            id: `rem-${bike.id}-oem-${idx + 1}`,
-            userId: user?.uid,
-            createdAt: nowIso,
-            updatedAt: nowIso,
-            timestampSource: 'client_pending' as const,
-          }))
+    const effectivePreset = !exists
+      ? selectedPreset || buildPresetFromCustomMotorcycle(stampedBike)
+      : undefined;
+    const rawOemReminders =
+      !exists && effectivePreset
+        ? generateOemSchedule(bike.id, effectivePreset, bike.odometer)
         : [];
+    const maxAllowedNewReminders = isPro
+      ? rawOemReminders.length
+      : Math.max(0, 2 - reminders.length);
+    const oemReminders: MaintenanceReminder[] = rawOemReminders
+      .slice(0, maxAllowedNewReminders)
+      .map((r, idx) => ({
+        ...r,
+        id: `rem-${bike.id}-oem-${idx + 1}`,
+        userId: user?.uid,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        timestampSource: 'client_pending' as const,
+      }));
+
+    const prevMotorcycles = motorcycles;
+    const prevActiveBikeId = activeBikeId;
+    const prevReminders = reminders;
+
+    if (exists) {
+      setMotorcycles(motorcycles.map((b) => (b.id === bike.id ? stampedBike : b)));
+    } else {
+      setMotorcycles([...motorcycles, stampedBike]);
+      setActiveBikeId(stampedBike.id);
+      if (oemReminders.length > 0) {
+        setReminders([...reminders, ...oemReminders]);
+      }
+    }
 
     if (user?.uid) {
       setSyncStatus('syncing');
@@ -871,25 +899,21 @@ export default function App() {
       });
 
       if (res.status === 'quota_or_permission_error') {
+        setMotorcycles(prevMotorcycles);
+        setActiveBikeId(prevActiveBikeId);
+        setReminders(prevReminders);
         setSyncStatus('synced');
         setIsPaywallOpen(true);
         return;
       }
       if (res.status === 'version_conflict') {
+        setMotorcycles(prevMotorcycles);
+        setActiveBikeId(prevActiveBikeId);
+        setReminders(prevReminders);
         setSyncStatus('sync_error');
         return;
       }
       setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-    }
-
-    if (exists) {
-      setMotorcycles(motorcycles.map((b) => (b.id === bike.id ? stampedBike : b)));
-    } else {
-      setMotorcycles([...motorcycles, stampedBike]);
-      setActiveBikeId(stampedBike.id);
-      if (oemReminders.length > 0) {
-        setReminders([...reminders, ...oemReminders]);
-      }
     }
   };
 
@@ -933,6 +957,11 @@ export default function App() {
   const handleSaveReminder = async (reminder: MaintenanceReminder) => {
     const existingRem = reminders.find((r) => r.id === reminder.id);
     const exists = Boolean(existingRem);
+    if (!exists && !isPro && reminders.length >= 2) {
+      setIsReminderModalOpen(false);
+      setIsPaywallOpen(true);
+      return;
+    }
     // Capture original base version BEFORE optimistic local state update
     const preEditRecord = existingRem
       ? {
@@ -1302,6 +1331,7 @@ export default function App() {
             return;
           }
           setEditingBike(null);
+          setGarageModalInitialCustomMode(false);
           setIsGarageModalOpen(true);
         }}
         onOpenAddService={() => {
@@ -1362,6 +1392,12 @@ export default function App() {
             userName={user.displayName || user.email}
             onAddMotorcycle={() => {
               setEditingBike(null);
+              setGarageModalInitialCustomMode(false);
+              setIsGarageModalOpen(true);
+            }}
+            onAddCustomMotorcycle={() => {
+              setEditingBike(null);
+              setGarageModalInitialCustomMode(true);
               setIsGarageModalOpen(true);
             }}
           />
@@ -1394,6 +1430,7 @@ export default function App() {
                   onOpenEditOdometer={() => setIsQuickAddOdoOpen(true)}
                   onOpenEditBike={() => {
                     setEditingBike(activeBike);
+                    setGarageModalInitialCustomMode(false);
                     setIsGarageModalOpen(true);
                   }}
                   onOpenGpsRide={() => {
@@ -1415,6 +1452,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      if (!isPro && reminders.length >= 2) {
+                        setIsPaywallOpen(true);
+                        return;
+                      }
                       setEditingReminder(null);
                       setIsReminderModalOpen(true);
                     }}
@@ -1522,6 +1563,10 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     sounds.playClick();
+                    if (!isPro && reminders.length >= 2) {
+                      setIsPaywallOpen(true);
+                      return;
+                    }
                     setEditingReminder(null);
                     setIsReminderModalOpen(true);
                   }}
@@ -1573,6 +1618,7 @@ export default function App() {
             subscription={subscription}
             hasProAccess={hasProAccess}
             existingCount={motorcycles.length}
+            initialCustomMode={garageModalInitialCustomMode}
             onSave={handleSaveBike}
             onDelete={handleDeleteBike}
             canDelete={true}

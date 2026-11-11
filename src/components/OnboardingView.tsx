@@ -5,6 +5,7 @@ import { PWAInstallButton } from './PWAInstallButton';
 
 interface OnboardingViewProps {
   onAddMotorcycle: () => void;
+  onAddCustomMotorcycle?: () => void;
   onStartOnboarding?: () => void;
   isAuthenticated?: boolean;
   userName?: string | null;
@@ -13,6 +14,7 @@ interface OnboardingViewProps {
 
 export const OnboardingView: React.FC<OnboardingViewProps> = ({
   onAddMotorcycle,
+  onAddCustomMotorcycle,
   onStartOnboarding,
   isAuthenticated = false,
 }) => {
@@ -111,23 +113,46 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
         {/* Primary CTA Button & Tagline */}
         <div className="space-y-3 pt-1">
           {isAuthenticated ? (
-            <button
-              type="button"
-              onClick={() => {
-                sounds.playClick();
-                onAddMotorcycle();
-              }}
-              className="w-full py-3.5 px-6 bg-gradient-to-b from-[#FF8A00] via-[#FF6B00] to-[#F05000] hover:from-[#FF7A00] hover:to-[#E04400] text-white rounded-2xl font-extrabold shadow-lg shadow-[#FF6B00]/30 transition-all flex items-center justify-between active:scale-98 cursor-pointer"
-            >
-              <span className="w-6" aria-hidden="true" />
-              <span className="flex items-center justify-center gap-2.5">
-                <span className="text-xl sm:text-2xl font-extrabold tracking-wide">
-                  Irehistro ang Motor Ko
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => {
+                  sounds.playClick();
+                  onAddMotorcycle();
+                }}
+                className="w-full py-3.5 px-6 bg-gradient-to-b from-[#FF8A00] via-[#FF6B00] to-[#F05000] hover:from-[#FF7A00] hover:to-[#E04400] text-white rounded-2xl font-extrabold shadow-lg shadow-[#FF6B00]/30 transition-all flex items-center justify-between active:scale-98 cursor-pointer"
+              >
+                <span className="w-6" aria-hidden="true" />
+                <span className="flex items-center justify-center gap-2.5">
+                  <span className="text-xl sm:text-2xl font-extrabold tracking-wide">
+                    Irehistro ang Motor Ko
+                  </span>
+                  <span className="sr-only">Add Your Motorcycle</span>
                 </span>
-                <span className="sr-only">Add Your Motorcycle</span>
-              </span>
-              <ChevronRight className="w-6 h-6 stroke-[2.5] text-white/95 shrink-0" />
-            </button>
+                <ChevronRight className="w-6 h-6 stroke-[2.5] text-white/95 shrink-0" />
+              </button>
+
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
+                <p className="text-xs font-bold text-slate-600">
+                  Wala sa listahan ang motor mo? Idagdag ito manually.
+                </p>
+                <button
+                  type="button"
+                  data-testid="onboarding-add-custom-bike-btn"
+                  onClick={() => {
+                    sounds.playClick();
+                    if (onAddCustomMotorcycle) {
+                      onAddCustomMotorcycle();
+                    } else {
+                      onAddMotorcycle();
+                    }
+                  }}
+                  className="w-full py-2.5 px-4 bg-white hover:bg-orange-50 text-[#FF6B00] border-2 border-[#FF6B00] rounded-xl font-extrabold text-xs transition-colors cursor-pointer shadow-2xs"
+                >
+                  + Add My Motorcycle Manually
+                </button>
+              </div>
+            </div>
           ) : (
             <button
               type="button"
