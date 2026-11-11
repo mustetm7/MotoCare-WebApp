@@ -242,7 +242,8 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
                 setConfirmDelete(false);
               }}
               className="p-0.5 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
-              title="Cancel"
+              title="Cancel delete"
+              aria-label="Cancel delete task"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -256,7 +257,8 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
               setConfirmDelete(true);
             }}
             className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors shrink-0 mt-0.5 cursor-pointer"
-            title="Delete task"
+            title={`Delete task: ${reminder.title}`}
+            aria-label={`Delete task: ${reminder.title}`}
           >
             <Trash2 className="w-4 h-4" />
           </button>

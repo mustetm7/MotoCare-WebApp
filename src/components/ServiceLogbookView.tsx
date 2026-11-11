@@ -1,11 +1,15 @@
 import React from 'react';
-import { Motorcycle, ServiceRecord, UserSubscription } from '../types';
-import { exportCasaServiceCsv } from '../utils/storage';
-import { Plus, Download, Search, Wrench, Building2, User, Trash2, ArrowLeft, X } from 'lucide-react';
+import { MaintenanceReminder, Motorcycle, ServiceRecord, UserSubscription } from '../types';
+import {
+  exportCasaServiceCsv,
+  generatePrintableMaintenancePdfReport,
+} from '../utils/storage';
+import { Plus, Download, FileText, Search, Wrench, Trash2, ArrowLeft, X } from 'lucide-react';
 import { sounds } from '../utils/audio';
 
 interface ServiceLogbookViewProps {
   records: ServiceRecord[];
+  reminders?: MaintenanceReminder[];
   bike: Motorcycle;
   subscription: UserSubscription;
   hasProAccess?: boolean;
@@ -18,6 +22,7 @@ interface ServiceLogbookViewProps {
 
 export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
   records,
+  reminders = [],
   bike,
   subscription,
   hasProAccess,
@@ -44,6 +49,8 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
     .filter((r) => (!bike?.id || showAllBikes ? true : r.bikeId === bike.id))
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+  const bikeReminders = reminders.filter((r) => (!bike?.id || showAllBikes ? true : r.bikeId === bike.id));
+
   const totalSpentPhp = bikeRecords.reduce((sum, r) => sum + r.totalCostPhp, 0);
   const diyRecords = bikeRecords.filter((r) => r.type === 'DIY');
   const casaRecords = bikeRecords.filter((r) => r.type === 'Casa / Official 3S');
@@ -68,7 +75,11 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
       onOpenPaywall();
       return;
     }
-    exportCasaServiceCsv(bike, bikeRecords);
+    exportCasaServiceCsv(bike, bikeRecords, bikeReminders);
+  };
+
+  const handleExportPdf = () => {
+    generatePrintableMaintenancePdfReport(bike, bikeRecords, bikeReminders);
   };
 
   return (
@@ -126,9 +137,24 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
 
         <div className="flex items-center gap-2">
           <button
+            type="button"
+            data-testid="export-pdf-btn"
+            onClick={handleExportPdf}
+            className="px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-white border border-slate-200 hover:border-[#FF6B00] rounded-xl transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+            title="Download Report"
+            aria-label="Export service history and maintenance records as PDF"
+          >
+            <FileText className="w-3.5 h-3.5 text-[#FF6B00]" />
+            <span>Download Report</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="export-csv-btn"
             onClick={handleExportCsv}
-            className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl transition-colors flex items-center gap-1 shadow-2xs"
+            className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
             title={isPro ? 'Export CSV' : 'Upgrade to Pro to Export CSV'}
+            aria-label={isPro ? 'Export service history and maintenance records as CSV' : 'Upgrade to Pro to Export CSV'}
           >
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">{isPro ? 'CSV' : 'CSV (Pro)'}</span>
@@ -136,8 +162,11 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
 
           {bike?.id && (
             <button
+              type="button"
               onClick={onOpenAddService}
-              className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-xl transition-all flex items-center gap-1 shadow-sm"
+              className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#FF6B00] hover:bg-[#EA580C] rounded-xl transition-all flex items-center gap-1 shadow-sm cursor-pointer"
+              title="Log new service record"
+              aria-label="Log new service record"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Log</span>
@@ -257,6 +286,8 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
                       type="button"
                       onClick={() => setConfirmDeleteRecordId(null)}
                       className="p-0.5 text-slate-400 hover:text-slate-600 rounded"
+                      title="Cancel delete record"
+                      aria-label="Cancel delete record"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -269,7 +300,8 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
                       setConfirmDeleteRecordId(record.id);
                     }}
                     className="p-1 text-slate-300 hover:text-red-500 transition-colors mt-2"
-                    title="Delete record"
+                    title={`Delete service record: ${record.title}`}
+                    aria-label={`Delete service record: ${record.title}`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

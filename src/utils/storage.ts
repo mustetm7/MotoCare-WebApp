@@ -18,6 +18,7 @@ import {
   INITIAL_PRE_RIDE_ITEMS,
   INITIAL_SUBSCRIPTION,
 } from '../data/initialData';
+import { jsPDF } from 'jspdf';
 
 export const STORAGE_KEYS = {
   MOTORCYCLES: 'motocare_app_motorcycles_v4',
@@ -343,9 +344,44 @@ export function analyzeReminder(reminder: MaintenanceReminder, currentOdo: numbe
   };
 }
 
-// --- Casa Service History Booklet Export (CSV / Print) ---
+// --- Casa Service History & Maintenance Records Export (CSV & Formatted PDF) ---
 
-export function exportCasaServiceCsv(bike: Motorcycle, records: ServiceRecord[]) {
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  if (typeof document === 'undefined') return;
+  let url = `blob:motocare/${filename}`;
+  let createdObjectUrl = false;
+  try {
+    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      url = URL.createObjectURL(blob);
+      createdObjectUrl = true;
+    }
+  } catch {
+    url = `blob:motocare/${filename}`;
+  }
+
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    if (createdObjectUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+export function exportCasaServiceCsv(
+  bike: Motorcycle,
+  records: ServiceRecord[],
+  reminders: MaintenanceReminder[] = []
+): string {
   const headers = [
     'Date',
     'Odometer (km)',
@@ -363,7 +399,7 @@ export function exportCasaServiceCsv(bike: Motorcycle, records: ServiceRecord[])
   ];
 
   const rows = records.map((r) => {
-    const partsCost = r.parts.reduce((sum, p) => sum + p.costPhp, 0);
+    const partsCost = (r.parts || []).reduce((sum, p) => sum + p.costPhp, 0);
     return [
       `"${r.date}"`,
       r.odometer,
@@ -381,14 +417,335 @@ export function exportCasaServiceCsv(bike: Motorcycle, records: ServiceRecord[])
     ];
   });
 
-  const csvContent = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
+  const sections: string[] = [
+    `# MotoCare PH — Service History & Maintenance Records (${bike.year} ${bike.brand} ${bike.model} - Plate: ${bike.licensePlate || 'N/A'})`,
+    headers.join(','),
+    ...rows.map((row) => row.join(',')),
+  ];
+
+  if (reminders.length > 0) {
+    const reminderHeaders = [
+      'Maintenance Task',
+      'Category',
+      'Interval (km)',
+      'Last Completed Odo (km)',
+      'Next Due Odo (km)',
+      'Remaining (km)',
+      'Status',
+      'OEM Spec Note',
+    ];
+    const reminderRows = reminders.map((rem) => {
+      const analysis = analyzeReminder(rem, bike.odometer);
+      return [
+        `"${rem.title.replace(/"/g, '""')}"`,
+        `"${(rem.category || 'General').replace(/"/g, '""')}"`,
+        rem.intervalKm,
+        rem.lastCompletedOdo,
+        rem.nextDueOdo,
+        analysis.remainingKm,
+        `"${analysis.status.toUpperCase()}"`,
+        `"${(rem.manualSpecNote || '').replace(/"/g, '""')}"`,
+      ].join(',');
+    });
+    sections.push('', '# Scheduled Maintenance Records', reminderHeaders.join(','), ...reminderRows);
+  }
+
+  const csvContent = sections.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `motocare-ph-casa-booklet-${bike.brand}-${bike.model}-${bike.licensePlate || 'bike'}.csv`.toLowerCase().replace(/\s+/g, '-');
-  a.click();
-  URL.revokeObjectURL(url);
+  const filename = `motocare-ph-service-records-${bike.brand}-${bike.model}-${bike.licensePlate || 'bike'}.csv`
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+  triggerBrowserDownload(blob, filename);
+  return csvContent;
+}
+
+export function exportServiceAndMaintenanceCsv(
+  bike: Motorcycle,
+  records: ServiceRecord[],
+  reminders: MaintenanceReminder[] = []
+): string {
+  return exportCasaServiceCsv(bike, records, reminders);
+}
+
+export const THEME_STORAGE_KEY = 'motocare_theme_preference';
+export type ThemeMode = 'light' | 'dark';
+
+export function loadThemePreference(): ThemeMode {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === 'dark' || saved === 'light') {
+      return saved;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return 'light';
+}
+
+export function saveThemePreference(theme: ThemeMode): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export interface PrintableMaintenanceReportSummary {
+  generatedAtIso: string;
+  bikeLabel: string;
+  licensePlate: string;
+  currentOdometerKm: number;
+  totalServiceRecords: number;
+  totalSpentPhp: number;
+  diySavedPhp: number;
+  casaVerifiedCount: number;
+  totalReminders: number;
+  overdueCount: number;
+  dueSoonCount: number;
+  goodCount: number;
+  overallHealthStatus: 'OVERDUE ATTENTION REQUIRED' | 'DUE SOON' | 'ALL INTERVALS GOOD';
+}
+
+export interface PrintableMaintenanceReportResult {
+  pdfContent: string;
+  filename: string;
+  summary: PrintableMaintenanceReportSummary;
+}
+
+/**
+ * Aggregates all service records and current maintenance status into a clean,
+ * multi-page printable PDF 1.4 report that users can download from their
+ * profile or service history tab.
+ */
+export function generatePrintableMaintenancePdfReport(
+  bike: Motorcycle | null | undefined,
+  records: ServiceRecord[] = [],
+  reminders: MaintenanceReminder[] = []
+): PrintableMaintenanceReportResult {
+  const safeBike: Motorcycle = bike || {
+    id: 'garage-summary',
+    nickname: 'MotoCare Garage',
+    brand: 'MotoCare',
+    model: 'All Motorcycles',
+    year: new Date().getFullYear(),
+    licensePlate: 'N/A',
+    color: 'Standard',
+    odometer: 0,
+    specs: {
+      transmission: 'Automatic Scooter',
+      cooling: 'Air-Cooled',
+      displacementCc: 125,
+      tirePressureFrontPsi: 29,
+      tirePressureRearPsi: 33,
+      oilViscosity: '10W-40',
+      oilCapacityLiters: 0.8,
+      recommendedServiceIntervalKm: 3000,
+    },
+  };
+
+  const bikeRecords = [...records]
+    .filter((r) => (!bike?.id ? true : r.bikeId === bike.id || !r.bikeId))
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const bikeReminders = [...reminders].filter((rem) =>
+    !bike?.id ? true : rem.bikeId === bike.id || !rem.bikeId
+  );
+
+  const totalSpentPhp = bikeRecords.reduce((sum, r) => sum + (r.totalCostPhp || 0), 0);
+  const diyRecordsCount = bikeRecords.filter((r) => r.type === 'DIY').length;
+  const diySavedPhp = diyRecordsCount * 250;
+  const casaVerifiedCount = bikeRecords.filter(
+    (r) => r.isCasaVerified || r.type === 'Casa / Official 3S'
+  ).length;
+
+  const analyzedReminders = bikeReminders.map((rem) => ({
+    reminder: rem,
+    analysis: analyzeReminder(rem, safeBike.odometer),
+  }));
+
+  const overdueCount = analyzedReminders.filter((x) => x.analysis.status === 'overdue').length;
+  const dueSoonCount = analyzedReminders.filter((x) => x.analysis.status === 'due-soon').length;
+  const goodCount = analyzedReminders.filter((x) => x.analysis.status === 'ok').length;
+
+  const overallHealthStatus: PrintableMaintenanceReportSummary['overallHealthStatus'] =
+    overdueCount > 0
+      ? 'OVERDUE ATTENTION REQUIRED'
+      : dueSoonCount > 0
+      ? 'DUE SOON'
+      : 'ALL INTERVALS GOOD';
+
+  const generatedAtIso = new Date().toISOString();
+  const generatedDateLabel = generatedAtIso.split('T')[0];
+  const bikeLabel = `${safeBike.year} ${safeBike.brand} ${safeBike.model}${
+    safeBike.nickname ? ` ("${safeBike.nickname}")` : ''
+  }`;
+
+  const summary: PrintableMaintenanceReportSummary = {
+    generatedAtIso,
+    bikeLabel,
+    licensePlate: safeBike.licensePlate || 'N/A',
+    currentOdometerKm: safeBike.odometer || 0,
+    totalServiceRecords: bikeRecords.length,
+    totalSpentPhp,
+    diySavedPhp,
+    casaVerifiedCount,
+    totalReminders: bikeReminders.length,
+    overdueCount,
+    dueSoonCount,
+    goodCount,
+    overallHealthStatus,
+  };
+
+  const lines: Array<{ text: string; bold?: boolean; size?: number }> = [
+    { text: 'MOTOCARE PH - SERVICE HISTORY & MAINTENANCE RECORDS', bold: true, size: 13 },
+    {
+      text: 'OFFICIAL PRINTABLE VEHICLE MAINTENANCE & SERVICE STATUS REPORT',
+      bold: true,
+      size: 10,
+    },
+    { text: `Report Generated: ${generatedDateLabel} | Overall Status: ${overallHealthStatus}`, size: 9 },
+    { text: '================================================================================', size: 8 },
+    { text: `Motorcycle: ${bikeLabel}`, bold: true, size: 10 },
+    {
+      text: `License Plate: ${summary.licensePlate} | Current Odometer: ${summary.currentOdometerKm.toLocaleString()} ${
+        safeBike.unit || 'km'
+      }`,
+      size: 9,
+    },
+    {
+      text: `Specs: ${safeBike.specs?.transmission || 'Standard'} | ${
+        safeBike.specs?.cooling || 'Air-Cooled'
+      } | Oil: ${safeBike.specs?.oilViscosity || '10W-40'} (${
+        safeBike.specs?.oilCapacityLiters || 0.8
+      }L)`,
+      size: 9,
+    },
+    {
+      text: `Total Documented Spend: PHP ${totalSpentPhp.toLocaleString()} | DIY Saved: +PHP ${diySavedPhp.toLocaleString()} | Casa 3S Verified: ${casaVerifiedCount}`,
+      bold: true,
+      size: 9,
+    },
+    {
+      text: `Current Maintenance Status: ${overdueCount} Overdue | ${dueSoonCount} Due Soon | ${goodCount} Good (${bikeReminders.length} Total Tasks)`,
+      bold: true,
+      size: 9,
+    },
+    { text: '--------------------------------------------------------------------------------', size: 8 },
+    { text: '1. CURRENT MAINTENANCE STATUS & SCHEDULED REMINDERS', bold: true, size: 11 },
+  ];
+
+  if (analyzedReminders.length === 0) {
+    lines.push({ text: 'No active maintenance reminders configured.', size: 9 });
+  } else {
+    analyzedReminders.forEach(({ reminder: rem, analysis }, idx) => {
+      const badge =
+        analysis.status === 'overdue'
+          ? 'OVERDUE'
+          : analysis.status === 'due-soon'
+          ? 'DUE SOON'
+          : 'GOOD';
+      lines.push({
+        text: `${idx + 1}. [${badge}] ${rem.title} (${rem.category || 'Maintenance'}) - Next Due: ${rem.nextDueOdo.toLocaleString()} km (${analysis.statusLabel})`,
+        bold: true,
+        size: 9,
+      });
+      lines.push({
+        text: `   Interval: Every ${rem.intervalKm.toLocaleString()} km | Last Done: ${rem.lastCompletedOdo.toLocaleString()} km${
+          rem.manualSpecNote ? ` | Spec: ${rem.manualSpecNote}` : ''
+        }`,
+        size: 8,
+      });
+    });
+  }
+
+  lines.push(
+    { text: '--------------------------------------------------------------------------------', size: 8 },
+    { text: '2. COMPLETE SERVICE HISTORY LOGBOOK', bold: true, size: 11 }
+  );
+
+  if (bikeRecords.length === 0) {
+    lines.push({ text: 'No service history records logged yet.', size: 9 });
+  } else {
+    bikeRecords.forEach((r, idx) => {
+      const partsCost = (r.parts || []).reduce((sum, p) => sum + (p.costPhp || 0), 0);
+      lines.push({
+        text: `${idx + 1}. [${r.date}] ${r.title} @ ${r.odometer.toLocaleString()} km - PHP ${r.totalCostPhp.toLocaleString()} (${r.type})`,
+        bold: true,
+        size: 9,
+      });
+      const details = [
+        `Shop: ${r.shopName || 'Workshop'}`,
+        r.oilBrandGrade ? `Oil: ${r.oilBrandGrade}` : '',
+        `Parts: PHP ${partsCost.toLocaleString()}`,
+        `Labor: PHP ${(r.laborCostPhp || 0).toLocaleString()}`,
+        r.receiptNumber ? `OR#: ${r.receiptNumber}` : '',
+        r.isCasaVerified ? 'Casa 3S Verified' : '',
+        r.notes ? `Notes: ${r.notes}` : '',
+      ]
+        .filter(Boolean)
+        .join(' | ');
+      if (details) {
+        lines.push({ text: `   ${details}`, size: 8 });
+      }
+    });
+  }
+
+  // Generate formatted multi-page PDF document using jsPDF
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'pt',
+    format: 'letter',
+    compress: false,
+  });
+
+  // Draw top accent header bar
+  doc.setFillColor(11, 19, 43); // Navy #0B132B
+  doc.rect(0, 0, 612, 24, 'F');
+  doc.setFillColor(255, 107, 0); // MotoCare Orange #FF6B00
+  doc.rect(0, 24, 612, 4, 'F');
+
+  let currentY = 52;
+  for (const line of lines) {
+    const fontSize = line.size || 9;
+    const lineHeight = fontSize + 6;
+    if (currentY + lineHeight > 748) {
+      doc.addPage();
+      currentY = 48;
+    }
+    doc.setFont('helvetica', line.bold ? 'bold' : 'normal');
+    doc.setFontSize(fontSize);
+    const sanitizedText = line.text.replace(/₱/g, 'PHP ').replace(/[^\x20-\x7E]/g, ' ');
+    doc.text(sanitizedText, 42, currentY);
+    currentY += lineHeight;
+  }
+
+  const rawJsPdfOutput = doc.output();
+  const pdfDocument = rawJsPdfOutput.replace(/^%PDF-1\.\d/, '%PDF-1.4');
+
+  const filename = `motocare-ph-maintenance-report-${safeBike.brand}-${safeBike.model}-${
+    safeBike.licensePlate || 'bike'
+  }.pdf`
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+
+  const blob = new Blob([pdfDocument], { type: 'application/pdf' });
+  triggerBrowserDownload(blob, filename);
+
+  return {
+    pdfContent: pdfDocument,
+    filename,
+    summary,
+  };
+}
+
+export function exportServiceAndMaintenancePdf(
+  bike: Motorcycle,
+  records: ServiceRecord[],
+  reminders: MaintenanceReminder[] = []
+): string {
+  return generatePrintableMaintenancePdfReport(bike, records, reminders).pdfContent;
 }
 
 export function exportFullBackupJson(

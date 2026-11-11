@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
@@ -13,6 +14,12 @@
     font-family: var(--font-body);
     background-color: #F8F9FA;
     color: #1E293B;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  html.dark body {
+    background-color: #0B0F19;
+    color: #F1F5F9;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -24,6 +31,60 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
+}
+
+/* Global Dark Mode Surface, Card & Typography Adaptation */
+.dark .bg-\[\#F8F9FA\] {
+  background-color: #0B0F19;
+}
+
+.dark .bg-white {
+  background-color: #111827;
+}
+
+.dark .bg-slate-50 {
+  background-color: #1E293B;
+}
+
+.dark .bg-slate-100 {
+  background-color: #1E293B;
+}
+
+.dark .border-slate-100 {
+  border-color: #1E293B;
+}
+
+.dark .border-slate-200,
+.dark .border-slate-200\/80 {
+  border-color: #334155;
+}
+
+.dark .border-slate-300 {
+  border-color: #475569;
+}
+
+.dark .text-slate-900 {
+  color: #F8FAFC;
+}
+
+.dark .text-slate-800 {
+  color: #F1F5F9;
+}
+
+.dark .text-slate-700 {
+  color: #E2E8F0;
+}
+
+.dark .text-slate-600 {
+  color: #CBD5E1;
+}
+
+.dark .text-slate-500 {
+  color: #94A3B8;
+}
+
+.dark .text-slate-400 {
+  color: #64748B;
 }
 
 /* Custom subtle scrollbars */

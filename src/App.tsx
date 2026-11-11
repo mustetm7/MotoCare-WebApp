@@ -44,6 +44,10 @@ import {
   resolveMotorcycleConflict,
   getKnownCloudVersion,
   getKnownCloudRevision,
+  ThemeMode,
+  loadThemePreference,
+  saveThemePreference,
+  generatePrintableMaintenancePdfReport,
 } from './utils/storage';
 import { sounds } from './utils/audio';
 
@@ -54,33 +58,20 @@ import { MaintenanceCard } from './components/MaintenanceCard';
 import { ServiceLogbookView } from './components/ServiceLogbookView';
 import { LtoView } from './components/LtoView';
 import { OnboardingView } from './components/OnboardingView';
+import { AccountRegistrationScreen } from './components/AccountRegistrationScreen';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OverdueAlertBanner } from './components/OverdueAlertBanner';
 import { triggerOverdueAlert } from './utils/notifications';
 import { AdminUsersPortal } from './components/AdminUsersPortal';
 
-// Lazy-loaded modals for optimal bundle splitting
-const GpsRideTrackerSheet = React.lazy(() =>
-  import('./components/GpsRideTrackerSheet').then((m) => ({ default: m.GpsRideTrackerSheet }))
-);
-const QuickAddOdometerModal = React.lazy(() =>
-  import('./components/QuickAddOdometerModal').then((m) => ({ default: m.QuickAddOdometerModal }))
-);
-const GarageModal = React.lazy(() =>
-  import('./components/GarageModal').then((m) => ({ default: m.GarageModal }))
-);
-const AddReminderModal = React.lazy(() =>
-  import('./components/AddReminderModal').then((m) => ({ default: m.AddReminderModal }))
-);
-const AddServiceRecordModal = React.lazy(() =>
-  import('./components/AddServiceRecordModal').then((m) => ({ default: m.AddServiceRecordModal }))
-);
-const PaywallModal = React.lazy(() =>
-  import('./components/PaywallModal').then((m) => ({ default: m.PaywallModal }))
-);
-const LegacyMigrationModal = React.lazy(() =>
-  import('./components/LegacyMigrationModal').then((m) => ({ default: m.LegacyMigrationModal }))
-);
+// Modals (statically imported to prevent dynamic module fetch failures in offline/dev environments)
+import { GpsRideTrackerSheet } from './components/GpsRideTrackerSheet';
+import { QuickAddOdometerModal } from './components/QuickAddOdometerModal';
+import { GarageModal } from './components/GarageModal';
+import { AddReminderModal } from './components/AddReminderModal';
+import { AddServiceRecordModal } from './components/AddServiceRecordModal';
+import { PaywallModal } from './components/PaywallModal';
+import { LegacyMigrationModal } from './components/LegacyMigrationModal';
 
 import { Plus } from 'lucide-react';
 import { generateOemSchedule, PhilippineModelPreset } from './data/philippinePresets';
@@ -623,8 +614,30 @@ export default function App() {
 
   const [isPaywallOpen, setIsPaywallOpen] = React.useState(false);
   const [isGpsModalOpen, setIsGpsModalOpen] = React.useState(false);
+  const [isAuthScreenOpen, setIsAuthScreenOpen] = React.useState(false);
+  const [authScreenInitialMode, setAuthScreenInitialMode] = React.useState<'register' | 'signin'>('register');
   const [isOverdueBannerDismissed, setIsOverdueBannerDismissed] = React.useState(false);
+  const [theme, setTheme] = React.useState<ThemeMode>(() => loadThemePreference());
   const alertedOverdueIds = React.useRef<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    saveThemePreference(theme);
+    if (typeof document !== 'undefined') {
+      document.documentElement.classList.toggle('dark', theme === 'dark');
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+  }, [theme]);
+
+  const handleToggleTheme = React.useCallback(() => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  }, []);
+
+  // Close dedicated auth screen automatically once user is authenticated
+  React.useEffect(() => {
+    if (user) {
+      setIsAuthScreenOpen(false);
+    }
+  }, [user]);
 
   // Listen to path, hash and popstate changes (for direct /admin URL)
   React.useEffect(() => {
@@ -798,6 +811,12 @@ export default function App() {
   };
 
   const handleSaveBike = async (bike: Motorcycle, selectedPreset?: PhilippineModelPreset) => {
+    if (!user) {
+      setIsGarageModalOpen(false);
+      setAuthScreenInitialMode('register');
+      setIsAuthScreenOpen(true);
+      return;
+    }
     const existingBike = motorcycles.find((b) => b.id === bike.id);
     const exists = Boolean(existingBike);
     if (!exists && !isPro && motorcycles.length >= 1) {
@@ -1250,7 +1269,15 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-slate-900 flex flex-col font-sans selection:bg-[#FF6B00] selection:text-white">
+    <div
+      data-testid="app-root-container"
+      data-theme={theme}
+      className={`min-h-screen flex flex-col font-sans selection:bg-[#FF6B00] selection:text-white transition-colors duration-200 ${
+        theme === 'dark'
+          ? 'dark bg-slate-950 text-slate-100'
+          : 'bg-[#F8F9FA] text-slate-900'
+      }`}
+    >
       {/* Top Navbar matching screenshots */}
       <Navbar
         activeTab={activeTab}
@@ -1265,6 +1292,11 @@ export default function App() {
         onOpenConflictReview={() => setIsConflictModalOpen(true)}
         onSelectBike={handleSelectBike}
         onOpenAddBike={() => {
+          if (!user) {
+            setAuthScreenInitialMode('register');
+            setIsAuthScreenOpen(true);
+            return;
+          }
           if (!isPro && motorcycles.length >= 1) {
             setIsPaywallOpen(true);
             return;
@@ -1279,7 +1311,12 @@ export default function App() {
         }}
         onOpenPaywall={() => setIsPaywallOpen(true)}
         onGoToHome={() => {
+          setIsAuthScreenOpen(false);
           setActiveTab('garage');
+        }}
+        onOpenAuthScreen={(mode = 'signin') => {
+          setAuthScreenInitialMode(mode);
+          setIsAuthScreenOpen(true);
         }}
         onOpenAdminPortal={isExactAdmin ? handleOpenAdminPortal : undefined}
         overdueCount={overdueCount}
@@ -1289,12 +1326,40 @@ export default function App() {
           setServiceModalInitialReminderId(rem.id);
           setIsServiceModalOpen(true);
         }}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+        serviceRecords={serviceRecords}
+        reminders={reminders}
+        onDownloadPdfReport={() => {
+          generatePrintableMaintenancePdfReport(activeBike, serviceRecords, reminders);
+        }}
       />
 
       {/* Main App Container matching mobile app width on desktop */}
       <main className="flex-1 max-w-md w-full mx-auto px-4 py-5 space-y-5 relative pb-24">
-        {motorcycles.length === 0 && !(activeTab === 'logbook' && serviceRecords.length > 0) ? (
+        {!user ? (
+          isAuthScreenOpen ? (
+            <AccountRegistrationScreen
+              initialMode={authScreenInitialMode}
+              onBack={() => setIsAuthScreenOpen(false)}
+            />
+          ) : (
+            <OnboardingView
+              isAuthenticated={false}
+              onStartOnboarding={() => {
+                setAuthScreenInitialMode('register');
+                setIsAuthScreenOpen(true);
+              }}
+              onAddMotorcycle={() => {
+                setAuthScreenInitialMode('register');
+                setIsAuthScreenOpen(true);
+              }}
+            />
+          )
+        ) : motorcycles.length === 0 && !(activeTab === 'logbook' && serviceRecords.length > 0) ? (
           <OnboardingView
+            isAuthenticated={true}
+            userName={user.displayName || user.email}
             onAddMotorcycle={() => {
               setEditingBike(null);
               setIsGarageModalOpen(true);
@@ -1387,6 +1452,7 @@ export default function App() {
               <div className="animate-in fade-in duration-150">
                 <ServiceLogbookView
                   records={serviceRecords}
+                  reminders={reminders}
                   bike={activeBike}
                   subscription={subscription}
                   hasProAccess={hasProAccess}
@@ -1499,7 +1565,7 @@ export default function App() {
           />
         )}
 
-        {isGarageModalOpen && (
+        { Boolean(user) && isGarageModalOpen && (
           <GarageModal
             isOpen={isGarageModalOpen}
             onClose={() => setIsGarageModalOpen(false)}

@@ -1,14 +1,31 @@
 import React from 'react';
-import { ActiveTab, Motorcycle, UserSubscription, CloudSyncStatus } from '../types';
-import { Bell, ChevronDown, Plus, Sparkles, Check, Vibrate, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { ActiveTab, Motorcycle, UserSubscription, CloudSyncStatus, ServiceRecord, MaintenanceReminder } from '../types';
+import {
+  Bell,
+  ChevronDown,
+  Plus,
+  Check,
+  Vibrate,
+  AlertTriangle,
+  ShieldCheck,
+  Settings,
+  Sun,
+  Moon,
+  FileText,
+} from 'lucide-react';
 import { sounds } from '../utils/audio';
 import { PWAInstallButton } from './PWAInstallButton';
-import { MaintenanceReminder } from '../types';
 import {
   testOverdueAlert,
   getNotificationPermission,
   requestNotificationPermission,
 } from '../utils/notifications';
+import {
+  ThemeMode,
+  loadThemePreference,
+  saveThemePreference,
+  generatePrintableMaintenancePdfReport,
+} from '../utils/storage';
 import { useAuth } from '../context/AuthContext';
 
 interface NavbarProps {
@@ -32,6 +49,12 @@ interface NavbarProps {
   overdueCount: number;
   overdueReminders?: MaintenanceReminder[];
   onOpenServiceForReminder?: (reminder: MaintenanceReminder) => void;
+  onOpenAuthScreen?: (mode?: 'signin' | 'register') => void;
+  theme?: ThemeMode;
+  onToggleTheme?: () => void;
+  serviceRecords?: ServiceRecord[];
+  reminders?: MaintenanceReminder[];
+  onDownloadPdfReport?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -54,6 +77,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   overdueCount,
   overdueReminders = [],
   onOpenServiceForReminder,
+  onOpenAuthScreen,
+  theme: propTheme,
+  onToggleTheme,
+  serviceRecords = [],
+  reminders = [],
+  onDownloadPdfReport,
 }) => {
   const { user, hasProAccess: contextHasProAccess, signIn, signOut } = useAuth();
   const isExactAdmin =
@@ -63,9 +92,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [bikeMenuOpen, setBikeMenuOpen] = React.useState(false);
   const [bellOpen, setBellOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
+  const [localTheme, setLocalTheme] = React.useState<ThemeMode>(() => loadThemePreference());
+  const currentTheme = propTheme ?? localTheme;
+
   const dropdownRef = React.useRef<HTMLDivElement>(null);
   const bellContainerRef = React.useRef<HTMLDivElement>(null);
   const userContainerRef = React.useRef<HTMLDivElement>(null);
+  const settingsContainerRef = React.useRef<HTMLDivElement>(null);
   const isActivePaidPro =
     subscription.tier === 'pro' &&
     subscription.status === 'active' &&
@@ -77,6 +111,30 @@ export const Navbar: React.FC<NavbarProps> = ({
   );
   const [testingVibration, setTestingVibration] = React.useState(false);
 
+  const handleToggleThemeClick = () => {
+    sounds.playClick();
+    if (onToggleTheme) {
+      onToggleTheme();
+    } else {
+      const next: ThemeMode = currentTheme === 'dark' ? 'light' : 'dark';
+      setLocalTheme(next);
+      saveThemePreference(next);
+      if (typeof document !== 'undefined') {
+        document.documentElement.classList.toggle('dark', next === 'dark');
+        document.documentElement.setAttribute('data-theme', next);
+      }
+    }
+  };
+
+  const handleDownloadPrintablePdf = () => {
+    sounds.playClick();
+    if (onDownloadPdfReport) {
+      onDownloadPdfReport();
+    } else {
+      generatePrintableMaintenancePdfReport(activeBike, serviceRecords, reminders);
+    }
+  };
+
   React.useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -87,6 +145,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       }
       if (userContainerRef.current && !userContainerRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
+      }
+      if (settingsContainerRef.current && !settingsContainerRef.current.contains(event.target as Node)) {
+        setSettingsMenuOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -143,6 +204,99 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* In-App PWA Install Button (Android & iOS) */}
             <PWAInstallButton variant="header" />
 
+            {/* User Settings (Theme Toggle & PDF Report) */}
+            <div className="relative shrink-0" ref={settingsContainerRef}>
+              <button
+                type="button"
+                data-testid="user-settings-button"
+                onClick={() => setSettingsMenuOpen((prev) => !prev)}
+                className="p-1.5 sm:p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors relative cursor-pointer"
+                title="User Settings"
+                aria-label="Open user settings"
+              >
+                <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+
+              {settingsMenuOpen && (
+                <div
+                  data-testid="user-settings-menu"
+                  className="absolute right-0 mt-2 w-64 bg-white border border-slate-100 rounded-2xl shadow-2xl p-3.5 z-50 text-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-100"
+                >
+                  <div className="font-extrabold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Settings className="w-4 h-4 text-[#FF6B00]" />
+                      <span>User Settings</span>
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      {currentTheme === 'dark' ? 'Dark' : 'Light'}
+                    </span>
+                  </div>
+
+                  {/* Theme Toggle Row */}
+                  <div className="flex items-center justify-between py-1">
+                    <div className="flex items-center gap-2">
+                      {currentTheme === 'dark' ? (
+                        <Moon className="w-4 h-4 text-amber-400" />
+                      ) : (
+                        <Sun className="w-4 h-4 text-[#FF6B00]" />
+                      )}
+                      <div>
+                        <div className="font-bold text-slate-800">Appearance</div>
+                        <div className="text-[10px] text-slate-400">
+                          {currentTheme === 'dark' ? 'Dark Mode Active' : 'Light Mode Active'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={currentTheme === 'dark'}
+                      data-testid="user-settings-theme-toggle"
+                      onClick={handleToggleThemeClick}
+                      title={currentTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                      aria-label={currentTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                      className={`px-2.5 py-1 rounded-xl font-bold text-[11px] flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                        currentTheme === 'dark'
+                          ? 'bg-slate-800 text-amber-400 border-slate-700'
+                          : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                      }`}
+                    >
+                      {currentTheme === 'dark' ? (
+                        <>
+                          <Moon className="w-3.5 h-3.5" />
+                          <span>Dark</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sun className="w-3.5 h-3.5" />
+                          <span>Light</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Printable PDF Report Download in Settings */}
+                  <div className="pt-1 border-t border-slate-100">
+                    <button
+                      type="button"
+                      data-testid="settings-download-pdf-report-btn"
+                      onClick={() => {
+                        handleDownloadPrintablePdf();
+                        setSettingsMenuOpen(false);
+                      }}
+                      title="Download Printable PDF Maintenance Report"
+                      aria-label="Download Printable PDF Maintenance Report"
+                      className="w-full py-2 px-3 rounded-xl bg-orange-50 hover:bg-orange-100 text-[#FF6B00] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Download PDF Report</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Notification Bell */}
             <div className="relative shrink-0" ref={bellContainerRef}>
               <button
@@ -150,6 +304,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onClick={() => setBellOpen(!bellOpen)}
                 className="p-1.5 sm:p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors relative"
                 title="Notifications"
+                aria-label="View maintenance notifications"
               >
                 <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
                 {overdueCount > 0 && (
@@ -356,6 +511,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       onClick={() => setUserMenuOpen(!userMenuOpen)}
                       className="w-6 h-6 sm:w-7 sm:h-7 rounded-full overflow-hidden border border-slate-200 hover:ring-2 hover:ring-[#FF6B00] transition-all shrink-0 cursor-pointer"
                       title={`Signed in as ${user.displayName || user.email}`}
+                      aria-label={`Account menu for ${user.displayName || user.email}`}
                     >
                       {user.photoURL ? (
                         <img src={user.photoURL} alt="Avatar" className="w-full h-full object-cover" />
@@ -368,9 +524,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => signIn()}
+                      onClick={() => {
+                        if (onOpenAuthScreen) {
+                          onOpenAuthScreen('signin');
+                        } else {
+                          signIn();
+                        }
+                      }}
                       className="px-2 py-0.5 sm:py-1 rounded-lg sm:rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-[10px] sm:text-xs font-bold flex items-center gap-1 shadow-2xs transition-all leading-none shrink-0 cursor-pointer"
-                      title="Sign In with Google to sync garage across devices"
+                      title="Sign In to sync garage across devices"
                     >
                       <svg className="w-3 h-3" viewBox="0 0 24 24">
                         <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -384,7 +546,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                   {/* User Profile Dropdown Menu */}
                   {user && userMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-slate-100 rounded-2xl shadow-xl p-3 z-50 text-xs space-y-2 animate-in fade-in">
+                    <div className="absolute right-0 top-full mt-2 w-60 bg-white border border-slate-100 rounded-2xl shadow-xl p-3 z-50 text-xs space-y-2 animate-in fade-in">
                       <div className="border-b border-slate-100 pb-2">
                         <div className="font-extrabold text-slate-800 truncate">{user.displayName || 'MotoCare Rider'}</div>
                         <div className="text-[10px] text-slate-400 truncate">{user.email}</div>
@@ -395,6 +557,44 @@ export const Navbar: React.FC<NavbarProps> = ({
                           {isPro ? '★ Pro Member' : 'Free Tier'}
                         </span>
                       </div>
+
+                      {/* Theme Toggle in User Profile Menu */}
+                      <div className="flex items-center justify-between py-1 border-t border-slate-100">
+                        <span className="text-[11px] text-slate-600 flex items-center gap-1.5">
+                          {currentTheme === 'dark' ? (
+                            <Moon className="w-3.5 h-3.5 text-amber-400" />
+                          ) : (
+                            <Sun className="w-3.5 h-3.5 text-[#FF6B00]" />
+                          )}
+                          <span>Theme:</span>
+                        </span>
+                        <button
+                          type="button"
+                          data-testid="profile-theme-toggle"
+                          onClick={handleToggleThemeClick}
+                          title={currentTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                          aria-label={currentTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                          className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] transition-colors cursor-pointer"
+                        >
+                          {currentTheme === 'dark' ? 'Dark Mode' : 'Light Mode'}
+                        </button>
+                      </div>
+
+                      {/* Download Printable PDF Report from Profile */}
+                      <button
+                        type="button"
+                        data-testid="profile-download-pdf-report-btn"
+                        onClick={() => {
+                          handleDownloadPrintablePdf();
+                          setUserMenuOpen(false);
+                        }}
+                        title="Download Printable PDF Maintenance Report"
+                        aria-label="Download Printable PDF Maintenance Report"
+                        className="w-full py-2 px-2.5 text-left text-xs font-bold bg-orange-50 hover:bg-orange-100 text-[#FF6B00] border border-orange-200/80 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <FileText className="w-3.5 h-3.5 shrink-0" />
+                        <span>Download PDF Report</span>
+                      </button>
 
                       {/* Admin Portal quick link for verified owner */}
                       {isExactAdmin && onOpenAdminPortal && (

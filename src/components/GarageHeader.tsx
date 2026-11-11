@@ -186,27 +186,12 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           </form>
         )}
 
-        {/* Preset Buttons matching screenshot */}
-        <div className="grid grid-cols-5 gap-2">
-          {[10, 25, 50, 100].map((km) => (
-            <button
-              key={km}
-              type="button"
-              onClick={() => {
-                sounds.playSuccess();
-                onAddKm(km);
-              }}
-              className="py-2 px-1 text-center bg-white hover:bg-orange-50 border border-slate-100 hover:border-orange-200 rounded-xl text-xs font-medium text-slate-600 hover:text-[#FF6B00] shadow-sm transition-all"
-            >
-              <span className="text-[#FF6B00] font-bold mr-0.5">+</span> +{km}
-            </button>
-          ))}
-
-          {/* + Custom Button */}
+        {/* Custom Distance Button */}
+        <div>
           <button
             type="button"
             onClick={() => setShowCustomInput(true)}
-            className="py-2 px-1 text-center bg-amber-50/70 hover:bg-amber-100 border border-amber-200/80 rounded-xl text-xs font-bold text-amber-700 shadow-sm flex items-center justify-center gap-0.5 transition-all"
+            className="w-full py-2 px-3 text-center bg-amber-50/70 hover:bg-amber-100 border border-amber-200/80 rounded-xl text-xs font-bold text-amber-700 shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
           >
             <SlidersHorizontal className="w-3 h-3 text-[#FF6B00]" />
             <span>+ Custom</span>
