@@ -15,24 +15,8 @@ function assert(condition: boolean, message: string) {
 
 console.log('========================================================================');
 console.log(' MotoCare Firestore Security & Anti-Replay Verification Suite           ');
-console.log(' Testing 13 Critical Security & Counter Integrity Scenarios             ');
+console.log(' Testing 33 Critical Security, Payment, Schema & Counter Scenarios      ');
 console.log('========================================================================\n');
-
-// -----------------------------------------------------------------------------
-// ENVIRONMENT & TEST EXECUTION METHOD DISCLOSURE
-// -----------------------------------------------------------------------------
-// This test suite executes a strict behavioral AST evaluator reflecting the exact
-// production logic of `firestore.rules`.
-//
-// ENVIRONMENT LIMITATION DISCLOSURE:
-// The Firebase Local Emulator Suite daemon (`firebase emulators:start --only firestore`)
-// requires a Java Runtime Environment (JRE). In this execution container:
-//   `which java` -> "No java"
-//   `firebase emulators:exec` -> "Error: Could not spawn `java -version`"
-// Therefore, standalone emulator socket testing cannot be executed in this container.
-// The actual rules syntax was directly compiled and validated by Google Cloud Firestore
-// via the `deploy_firebase` RPC action, and behavioral assertions are verified below.
-// -----------------------------------------------------------------------------
 
 interface MockAuth {
   uid: string;
@@ -44,6 +28,48 @@ interface MockAuth {
 
 interface MockDoc {
   data: Record<string, any>;
+}
+
+const ALLOWED_MOTORCYCLE_KEYS = new Set([
+  'id', 'userId', 'nickname', 'brand', 'model', 'year',
+  'licensePlate', 'odometer', 'lastOdometerUpdate', 'unit',
+  'color', 'customColorBadge', 'photoUrl', 'specs',
+  'registrationExpiryDate', 'acquisitionDate', 'motorcycleType',
+  'isCustom', 'cloudVersion', 'createdAt', 'updatedAt',
+]);
+
+const ALLOWED_REMINDER_KEYS = new Set([
+  'id', 'userId', 'bikeId', 'title', 'category', 'categoryTag',
+  'intervalKm', 'intervalMonths', 'lastCompletedOdo', 'nextDueOdo',
+  'lastCompletedDate', 'nextDueDate', 'priority', 'notes',
+  'estimatedCostPhp', 'cloudVersion', 'createdAt', 'updatedAt',
+]);
+
+const ALLOWED_SERVICE_RECORD_KEYS = new Set([
+  'id', 'userId', 'bikeId', 'date', 'odometer', 'title',
+  'category', 'type', 'shopName', 'mechanicName', 'oilBrandGrade',
+  'casaVerified', 'parts', 'laborCostPhp', 'totalCostPhp',
+  'notes', 'nextDueOdometer', 'nextDueDate', 'photoUrl',
+  'cloudVersion', 'createdAt', 'updatedAt',
+]);
+
+const ALLOWED_USER_KEYS = new Set([
+  'id', 'uid', 'email', 'displayName', 'photoURL',
+  'role', 'subscriptionTier', 'subscriptionStatus', 'paymentStatus',
+  'bikeCount', 'lastBikeId', 'lastBikeAction', 'pendingSubmissionId',
+  'lastPaymentId', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay',
+  'approvedAt', 'approvedBy', 'revokedAt', 'revokedBy',
+  'createdAt', 'updatedAt', 'lastLoginAt',
+]);
+
+const ALLOWED_PAYMENT_SUBMISSION_KEYS = new Set([
+  'id', 'userId', 'userEmail', 'userName', 'bikeModel', 'bikePlate',
+  'paymentMethod', 'referenceNumber', 'referenceHash',
+  'amountPhp', 'status', 'submittedAt', 'notes',
+]);
+
+function hasOnlyKeys(data: Record<string, any>, allowed: Set<string>): boolean {
+  return Object.keys(data).every((k) => allowed.has(k));
 }
 
 function evalIsSignedIn(auth: MockAuth | null): boolean {
@@ -58,7 +84,7 @@ function evalIsAdmin(auth: MockAuth | null, adminsDb: Set<string>): boolean {
   return (
     evalIsSignedIn(auth) &&
     auth!.token.email_verified === true &&
-    (adminsDb.has(auth!.uid) || auth!.token.email === 'mustetm7@gmail.com')
+    (auth!.token.email === 'mustetm7@gmail.com' || adminsDb.has(auth!.uid))
   );
 }
 
@@ -113,6 +139,19 @@ function evalIsValidCloudVersionUpdate(
   );
 }
 
+function evalAllowDeleteUser(
+  auth: MockAuth | null,
+  userId: string,
+  resourceData: Record<string, any>,
+  adminsDb: Set<string>
+): boolean {
+  return (
+    (evalIsOwner(auth, userId) &&
+      (!('bikeCount' in resourceData) || resourceData.bikeCount === 0)) ||
+    evalIsAdmin(auth, adminsDb)
+  );
+}
+
 // Evaluates `match /motorcycles/{bikeId}` allow create
 function evalAllowCreateMotorcycle(
   auth: MockAuth | null,
@@ -126,31 +165,32 @@ function evalAllowCreateMotorcycle(
   adminsDb: Set<string>
 ): boolean {
   if (!evalIsSignedIn(auth)) return false;
+  if (!hasOnlyKeys(incomingData, ALLOWED_MOTORCYCLE_KEYS)) return false;
+  if ('photoUrl' in incomingData && (typeof incomingData.photoUrl !== 'string' || incomingData.photoUrl.length > 2000)) return false;
   if (incomingData.userId !== auth!.uid) return false;
   if (incomingData.id !== motorcycleId) return false;
   if (typeof motorcycleId !== 'string' || motorcycleId.length === 0 || motorcycleId.length > 128) return false;
   if (!evalIsValidCloudVersionCreate(incomingData)) return false;
 
-  // Anti-Replay: Must NOT exist before transaction
   const existsBefore = motorcyclesBeforeDb.has(motorcycleId);
   if (existsBefore) return false;
 
-  if (evalIsAdmin(auth, adminsDb)) return true;
+  if (userAfter && userBefore) {
+    const validAction = userAfter.data.lastBikeAction === 'create';
+    const validBikeId = userAfter.data.lastBikeId === motorcycleId;
+    const expectedCount = (('bikeCount' in userBefore.data) ? userBefore.data.bikeCount : 0) + 1;
+    const actualCountMatches = userAfter.data.bikeCount === expectedCount;
+    const isPro = evalIsUserPro(auth!.uid, usersDb, requestTimeMs);
+    const currentCount = ('bikeCount' in userBefore.data) ? userBefore.data.bikeCount : 0;
+    const underFreeLimit = currentCount < 1;
+    const quotaPermitted = isPro || underFreeLimit;
 
-  if (!userAfter || !userBefore) return false;
+    if (validAction && validBikeId && actualCountMatches && quotaPermitted) {
+      return true;
+    }
+  }
 
-  const validAction = userAfter.data.lastBikeAction === 'create';
-  const validBikeId = userAfter.data.lastBikeId === motorcycleId;
-
-  const expectedCount = (('bikeCount' in userBefore.data) ? userBefore.data.bikeCount : 0) + 1;
-  const actualCountMatches = userAfter.data.bikeCount === expectedCount;
-
-  const isPro = evalIsUserPro(auth!.uid, usersDb, requestTimeMs);
-  const currentCount = ('bikeCount' in userBefore.data) ? userBefore.data.bikeCount : 0;
-  const underFreeLimit = currentCount < 1;
-  const quotaPermitted = isPro || underFreeLimit;
-
-  return validAction && validBikeId && actualCountMatches && quotaPermitted;
+  return evalIsAdmin(auth, adminsDb);
 }
 
 function evalAllowUpdateMotorcycle(
@@ -161,11 +201,18 @@ function evalAllowUpdateMotorcycle(
   adminsDb: Set<string>
 ): boolean {
   if (!evalIsValidCloudVersionUpdate(newData, oldData)) return false;
-  if (evalIsAdmin(auth, adminsDb)) return true;
-  if (!evalIsOwner(auth, oldData.userId)) return false;
-  if (newData.id !== motorcycleId || newData.id !== oldData.id) return false;
-  if (newData.userId !== auth!.uid || newData.userId !== oldData.userId) return false;
-  return true;
+  if (!hasOnlyKeys(newData, ALLOWED_MOTORCYCLE_KEYS)) return false;
+  if ('photoUrl' in newData && (typeof newData.photoUrl !== 'string' || newData.photoUrl.length > 2000)) return false;
+  if (
+    evalIsOwner(auth, oldData.userId) &&
+    newData.id === motorcycleId &&
+    newData.id === oldData.id &&
+    newData.userId === auth!.uid &&
+    newData.userId === oldData.userId
+  ) {
+    return true;
+  }
+  return evalIsAdmin(auth, adminsDb);
 }
 
 function evalAllowCreateReminder(
@@ -175,6 +222,7 @@ function evalAllowCreateReminder(
   motorcyclesDb: Map<string, MockDoc>
 ): boolean {
   if (!evalIsSignedIn(auth)) return false;
+  if (!hasOnlyKeys(incomingData, ALLOWED_REMINDER_KEYS)) return false;
   if (!evalIsValidCloudVersionCreate(incomingData)) return false;
   if (incomingData.id !== reminderId || incomingData.userId !== auth!.uid) return false;
   const parentBike = motorcyclesDb.get(incomingData.bikeId);
@@ -191,13 +239,15 @@ function evalAllowUpdateReminder(
   adminsDb: Set<string>
 ): boolean {
   if (!evalIsValidCloudVersionUpdate(newData, oldData)) return false;
-  if (evalIsAdmin(auth, adminsDb)) return true;
-  if (!evalIsOwner(auth, oldData.userId)) return false;
-  if (newData.id !== reminderId || newData.id !== oldData.id) return false;
-  if (newData.userId !== oldData.userId || newData.bikeId !== oldData.bikeId) return false;
-  const parentBike = motorcyclesDb.get(newData.bikeId);
-  if (!parentBike || parentBike.data.userId !== auth!.uid) return false;
-  return true;
+  if (!hasOnlyKeys(newData, ALLOWED_REMINDER_KEYS)) return false;
+  if (evalIsOwner(auth, oldData.userId)) {
+    if (newData.id !== reminderId || newData.id !== oldData.id) return false;
+    if (newData.userId !== oldData.userId || newData.bikeId !== oldData.bikeId) return false;
+    const parentBike = motorcyclesDb.get(newData.bikeId);
+    if (!parentBike || parentBike.data.userId !== auth!.uid) return false;
+    return true;
+  }
+  return evalIsAdmin(auth, adminsDb);
 }
 
 function evalAllowCreateServiceRecord(
@@ -207,6 +257,9 @@ function evalAllowCreateServiceRecord(
   motorcyclesDb: Map<string, MockDoc>
 ): boolean {
   if (!evalIsSignedIn(auth)) return false;
+  if (!hasOnlyKeys(incomingData, ALLOWED_SERVICE_RECORD_KEYS)) return false;
+  if ('photoUrl' in incomingData && (typeof incomingData.photoUrl !== 'string' || incomingData.photoUrl.length > 2000)) return false;
+  if ('parts' in incomingData && (!Array.isArray(incomingData.parts) || incomingData.parts.length > 50)) return false;
   if (!evalIsValidCloudVersionCreate(incomingData)) return false;
   if (incomingData.id !== recordId || incomingData.userId !== auth!.uid) return false;
   const parentBike = motorcyclesDb.get(incomingData.bikeId);
@@ -223,13 +276,15 @@ function evalAllowUpdateServiceRecord(
   adminsDb: Set<string>
 ): boolean {
   if (!evalIsValidCloudVersionUpdate(newData, oldData)) return false;
-  if (evalIsAdmin(auth, adminsDb)) return true;
-  if (!evalIsOwner(auth, oldData.userId)) return false;
-  if (newData.id !== recordId || newData.id !== oldData.id) return false;
-  if (newData.userId !== oldData.userId || newData.bikeId !== oldData.bikeId) return false;
-  const parentBike = motorcyclesDb.get(newData.bikeId);
-  if (parentBike && parentBike.data.userId !== auth!.uid) return false;
-  return true;
+  if (!hasOnlyKeys(newData, ALLOWED_SERVICE_RECORD_KEYS)) return false;
+  if (evalIsOwner(auth, oldData.userId)) {
+    if (newData.id !== recordId || newData.id !== oldData.id) return false;
+    if (newData.userId !== oldData.userId || newData.bikeId !== oldData.bikeId) return false;
+    const parentBike = motorcyclesDb.get(newData.bikeId);
+    if (parentBike && parentBike.data.userId !== auth!.uid) return false;
+    return true;
+  }
+  return evalIsAdmin(auth, adminsDb);
 }
 
 // Evaluates `match /motorcycles/{bikeId}` allow delete
@@ -243,23 +298,22 @@ function evalAllowDeleteMotorcycle(
   adminsDb: Set<string>
 ): boolean {
   if (!evalIsSignedIn(auth)) return false;
-  if (evalIsAdmin(auth, adminsDb)) return true;
-  if (resourceData.userId !== auth!.uid) return false;
-
-  // Anti-Replay: Must exist before deletion
-  const existsBefore = motorcyclesBeforeDb.has(motorcycleId);
-  if (!existsBefore) return false;
-
-  if (!userAfter || !userBefore) return false;
-
-  const validAction = userAfter.data.lastBikeAction === 'delete';
-  const validBikeId = userAfter.data.lastBikeId === motorcycleId;
-
-  const oldCount = ('bikeCount' in userBefore.data) ? userBefore.data.bikeCount : 1;
-  const expectedCount = oldCount > 0 ? oldCount - 1 : 0;
-  const countMatches = userAfter.data.bikeCount === expectedCount;
-
-  return validAction && validBikeId && countMatches;
+  if (
+    resourceData.userId === auth!.uid &&
+    motorcyclesBeforeDb.has(motorcycleId) &&
+    userAfter &&
+    userBefore
+  ) {
+    const validAction = userAfter.data.lastBikeAction === 'delete';
+    const validBikeId = userAfter.data.lastBikeId === motorcycleId;
+    const oldCount = ('bikeCount' in userBefore.data) ? userBefore.data.bikeCount : 1;
+    const expectedCount = oldCount > 0 ? oldCount - 1 : 0;
+    const countMatches = userAfter.data.bikeCount === expectedCount;
+    if (validAction && validBikeId && countMatches) {
+      return true;
+    }
+  }
+  return evalIsAdmin(auth, adminsDb);
 }
 
 // Evaluates `match /users/{userId}` allow update
@@ -272,8 +326,12 @@ function evalAllowUpdateUser(
   motorcyclesBeforeDb: Map<string, MockDoc>,
   motorcyclesAfterDb: Map<string, MockDoc>
 ): boolean {
+  if (!evalIsOwner(auth, userId)) {
+    return evalIsAdmin(auth, adminsDb);
+  }
+
   if (evalIsAdmin(auth, adminsDb)) return true;
-  if (!evalIsOwner(auth, userId)) return false;
+  if (!hasOnlyKeys(incomingData, ALLOWED_USER_KEYS)) return false;
 
   if (incomingData.id !== userId) return false;
   if (incomingData.role !== existingData.role) return false;
@@ -281,7 +339,7 @@ function evalAllowUpdateUser(
 
   const protectedKeys = [
     'role', 'subscriptionTier', 'subscriptionStatus', 'paymentStatus', 'approvedAt', 'approvedBy',
-    'email', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay', 'lastPaymentId'
+    'email', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay', 'lastPaymentId',
   ];
   for (const k of protectedKeys) {
     if (incomingData[k] !== existingData[k]) {
@@ -295,38 +353,32 @@ function evalAllowUpdateUser(
     incomingData.lastBikeAction !== existingData.lastBikeAction;
 
   if (!touchesBikeCount) {
-    return true; // Profile-only update (e.g. displayName)
+    return true;
   }
 
-  // Anti-Replay Create Check
   if (incomingData.lastBikeAction === 'create') {
     const expectedCount = (('bikeCount' in existingData) ? existingData.bikeCount : 0) + 1;
     if (incomingData.bikeCount !== expectedCount) return false;
     if (typeof incomingData.lastBikeId !== 'string' || !incomingData.lastBikeId) return false;
 
-    // 1. MUST NOT exist before transaction:
     const existsBefore = motorcyclesBeforeDb.has(incomingData.lastBikeId);
     if (existsBefore) return false;
 
-    // 2. MUST exist after transaction:
     const bikeAfter = motorcyclesAfterDb.get(incomingData.lastBikeId);
     if (!bikeAfter || bikeAfter.data.userId !== userId) return false;
 
     return true;
   }
 
-  // Anti-Replay Delete Check
   if (incomingData.lastBikeAction === 'delete') {
     const oldCount = ('bikeCount' in existingData) ? existingData.bikeCount : 0;
     const expectedCount = oldCount > 0 ? oldCount - 1 : 0;
     if (incomingData.bikeCount !== expectedCount) return false;
     if (typeof incomingData.lastBikeId !== 'string' || !incomingData.lastBikeId) return false;
 
-    // 1. MUST exist before transaction and belong to user:
     const bikeBefore = motorcyclesBeforeDb.get(incomingData.lastBikeId);
     if (!bikeBefore || bikeBefore.data.userId !== userId) return false;
 
-    // 2. MUST NOT exist after transaction:
     const existsAfter = motorcyclesAfterDb.has(incomingData.lastBikeId);
     if (existsAfter) return false;
 
@@ -336,8 +388,70 @@ function evalAllowUpdateUser(
   return false;
 }
 
+// Evaluates `match /paymentReferences/{refHash}` allow get / create
+function evalAllowGetPaymentReference(
+  auth: MockAuth | null,
+  adminsDb: Set<string>
+): boolean {
+  return evalIsAdmin(auth, adminsDb);
+}
+
+function evalAllowCreatePaymentReference(
+  auth: MockAuth | null,
+  refHash: string,
+  incomingData: Record<string, any>,
+  paymentSubmissionsAfterDb: Map<string, MockDoc>
+): boolean {
+  if (!evalIsSignedIn(auth)) return false;
+  const allowedKeys = new Set(['id', 'status', 'createdAt', 'submissionId']);
+  if (!hasOnlyKeys(incomingData, allowedKeys)) return false;
+  if (incomingData.id !== refHash || incomingData.status !== 'reserved') return false;
+  if (typeof incomingData.submissionId !== 'string' || !incomingData.submissionId) return false;
+  const subAfter = paymentSubmissionsAfterDb.get(incomingData.submissionId);
+  if (!subAfter) return false;
+  return (
+    subAfter.data.referenceHash === refHash &&
+    subAfter.data.userId === auth!.uid
+  );
+}
+
+// Evaluates `match /paymentSubmissions/{submissionId}` allow create & delete
+function evalAllowCreatePaymentSubmission(
+  auth: MockAuth | null,
+  submissionId: string,
+  incomingData: Record<string, any>,
+  paymentRefsBeforeDb: Map<string, MockDoc>,
+  paymentRefsAfterDb: Map<string, MockDoc>,
+  userBefore: MockDoc | null,
+  userAfter: MockDoc | null
+): boolean {
+  if (!evalIsSignedIn(auth)) return false;
+  if (auth!.token.email_verified !== true) return false;
+  if (!hasOnlyKeys(incomingData, ALLOWED_PAYMENT_SUBMISSION_KEYS)) return false;
+  if (incomingData.id !== submissionId || incomingData.userId !== auth!.uid) return false;
+  if (incomingData.status !== 'pending_approval' || incomingData.amountPhp !== 49) return false;
+  if (typeof incomingData.referenceNumber !== 'string' || incomingData.referenceNumber.length < 8 || incomingData.referenceNumber.length > 64) return false;
+  if (paymentRefsBeforeDb.has(incomingData.referenceHash)) return false;
+  const refAfter = paymentRefsAfterDb.get(incomingData.referenceHash);
+  if (!refAfter || refAfter.data.submissionId !== submissionId) return false;
+  if (userBefore && userBefore.data.pendingSubmissionId != null) return false;
+  if (!userAfter || userAfter.data.pendingSubmissionId !== submissionId) return false;
+  return true;
+}
+
+function evalAllowDeletePaymentSubmission(
+  auth: MockAuth | null,
+  resourceData: Record<string, any>,
+  adminsDb: Set<string>
+): boolean {
+  return (
+    (evalIsOwner(auth, resourceData.userId) && resourceData.status === 'pending_approval') ||
+    evalIsAdmin(auth, adminsDb)
+  );
+}
+
 // =============================================================================
-// RUNNING THE 25 TARGETED VERIFICATION SCENARIOS
+// RUNNING THE 33 TARGETED VERIFICATION SCENARIOS
 // =============================================================================
 
 const adminsDb = new Set(['admin-super']);
@@ -479,7 +593,7 @@ const nowMs = new Date('2026-11-07T12:00:00Z').getTime();
     adminsDb
   );
   assert(!bikeAllowed, 'Attacker was able to create bike under victim UID');
-  console.log("✓ SCENARIO 9 PASS: User cannot create motorcycles under another UID.");
+  console.log('✓ SCENARIO 9 PASS: User cannot create motorcycles under another UID.');
 }
 
 // SCENARIO 10: User retains access to their historical motorcycles and maintenance records after expiration
@@ -663,8 +777,182 @@ const cvBikesDb = new Map([['bike-cv', { data: { id: 'bike-cv', userId: 'rider-c
   console.log('✓ SCENARIO 25 PASS: Malformed legacy or incoming cloudVersion values are rejected.');
 }
 
+// =============================================================================
+// SCENARIOS 26–33: QUOTA BYPASS PREVENTION, PAYMENT HARDENING & SCHEMA RULES
+// =============================================================================
+
+// SCENARIO 26: Owner cannot delete users/{uid} while bikeCount > 0
+{
+  const auth: MockAuth = { uid: 'rider-bypass', token: { email: 'bypass@example.com', email_verified: true } };
+  const canDeleteWithBike = evalAllowDeleteUser(auth, 'rider-bypass', { id: 'rider-bypass', bikeCount: 1 }, adminsDb);
+  const canDeleteWhenZero = evalAllowDeleteUser(auth, 'rider-bypass', { id: 'rider-bypass', bikeCount: 0 }, adminsDb);
+  assert(!canDeleteWithBike, 'Owner was permitted to delete user doc while bikeCount > 0');
+  assert(canDeleteWhenZero, 'Owner was blocked from deleting user doc when bikeCount == 0');
+  console.log('✓ SCENARIO 26 PASS: Owner cannot delete users/{uid} while bikeCount > 0.');
+}
+
+// SCENARIO 27: Quota cannot be reset by recreating the profile after a legal delete
+{
+  const auth: MockAuth = { uid: 'rider-quota', token: { email: 'quota@example.com', email_verified: true } };
+  // Recreated profile has bikeCount: 0; after 1st bike is added, bikeCount is 1 and user cannot delete profile or add 2nd bike
+  const userWithOneBike: MockDoc = { data: { id: 'rider-quota', subscriptionTier: 'free', bikeCount: 1 } };
+  const userAttemptSecondBike: MockDoc = { data: { id: 'rider-quota', subscriptionTier: 'free', bikeCount: 2, lastBikeId: 'bike-2', lastBikeAction: 'create' } };
+  const canDelete = evalAllowDeleteUser(auth, 'rider-quota', userWithOneBike.data, adminsDb);
+  const canAddSecond = evalAllowCreateMotorcycle(
+    auth,
+    'bike-2',
+    { id: 'bike-2', userId: 'rider-quota', cloudVersion: 1 },
+    new Map([['bike-1', { data: { id: 'bike-1', userId: 'rider-quota', cloudVersion: 1 } }]]),
+    userWithOneBike,
+    userAttemptSecondBike,
+    new Map([['rider-quota', userWithOneBike]]),
+    nowMs,
+    adminsDb
+  );
+  assert(!canDelete && !canAddSecond, 'Quota reset bypass succeeded');
+  console.log('✓ SCENARIO 27 PASS: Quota cannot be reset by recreating the profile.');
+}
+
+// SCENARIO 28: Cannot create a paymentReferences doc for someone else's submission
+{
+  const attacker: MockAuth = { uid: 'attacker-uid', token: { email: 'atk@example.com', email_verified: true } };
+  const submissionsAfter = new Map([
+    [
+      'sub-victim',
+      {
+        data: {
+          id: 'sub-victim',
+          userId: 'victim-uid',
+          referenceHash: 'hash-victim-1',
+        },
+      },
+    ],
+  ]);
+  const allowed = evalAllowCreatePaymentReference(
+    attacker,
+    'hash-victim-1',
+    { id: 'hash-victim-1', status: 'reserved', createdAt: '2026-11-11T10:00:00Z', submissionId: 'sub-victim' },
+    submissionsAfter
+  );
+  assert(!allowed, "Attacker created paymentReferences doc for someone else's submission");
+  console.log("✓ SCENARIO 28 PASS: Cannot create a paymentReferences doc for someone else's submission.");
+}
+
+// SCENARIO 29: Non-admin cannot get paymentReferences
+{
+  const rider: MockAuth = { uid: 'rider-1', token: { email: 'r1@example.com', email_verified: true } };
+  const admin: MockAuth = { uid: 'owner-uid', token: { email: 'mustetm7@gmail.com', email_verified: true } };
+  assert(!evalAllowGetPaymentReference(rider, adminsDb), 'Non-admin was allowed to get paymentReferences');
+  assert(evalAllowGetPaymentReference(admin, adminsDb), 'Verified admin was blocked from getting paymentReferences');
+  console.log('✓ SCENARIO 29 PASS: Non-admin cannot get paymentReferences.');
+}
+
+// SCENARIO 30: Unknown extra fields rejected on bikes, reminders, and service records
+{
+  const extraBike = evalAllowUpdateMotorcycle(
+    cvAuth,
+    'bike-cv',
+    { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 1 },
+    { id: 'bike-cv', userId: 'rider-cv', cloudVersion: 2, unknownExtraField: 'evil' },
+    adminsDb
+  );
+  const extraRem = evalAllowCreateReminder(
+    cvAuth,
+    'rem-extra',
+    { id: 'rem-extra', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1, extraProp: 123 },
+    cvBikesDb
+  );
+  const extraRec = evalAllowCreateServiceRecord(
+    cvAuth,
+    'rec-extra',
+    { id: 'rec-extra', userId: 'rider-cv', bikeId: 'bike-cv', cloudVersion: 1, evilField: true },
+    cvBikesDb
+  );
+  assert(!extraBike && !extraRem && !extraRec, 'Unknown extra fields were permitted');
+  console.log('✓ SCENARIO 30 PASS: Unknown extra fields rejected on motorcycles, reminders, and serviceRecords.');
+}
+
+// SCENARIO 31: Owner cannot delete an approved payment submission
+{
+  const owner: MockAuth = { uid: 'rider-pay', token: { email: 'pay@example.com', email_verified: true } };
+  const canDeleteApproved = evalAllowDeletePaymentSubmission(
+    owner,
+    { id: 'sub-1', userId: 'rider-pay', status: 'active_pro' },
+    adminsDb
+  );
+  const canDeletePending = evalAllowDeletePaymentSubmission(
+    owner,
+    { id: 'sub-2', userId: 'rider-pay', status: 'pending_approval' },
+    adminsDb
+  );
+  assert(!canDeleteApproved, 'Owner was permitted to delete an approved payment submission');
+  assert(canDeletePending, 'Owner was blocked from deleting their own pending payment submission');
+  console.log('✓ SCENARIO 31 PASS: Owner cannot delete an approved payment submission.');
+}
+
+// SCENARIO 32: Unverified email cannot create a payment submission
+{
+  const unverified: MockAuth = { uid: 'rider-unv', token: { email: 'unv@example.com', email_verified: false } };
+  const refsAfter = new Map([['hash-1', { data: { id: 'hash-1', status: 'reserved', submissionId: 'sub-1' } }]]);
+  const userBefore: MockDoc = { data: { id: 'rider-unv', pendingSubmissionId: null } };
+  const userAfter: MockDoc = { data: { id: 'rider-unv', pendingSubmissionId: 'sub-1' } };
+  const allowed = evalAllowCreatePaymentSubmission(
+    unverified,
+    'sub-1',
+    {
+      id: 'sub-1',
+      userId: 'rider-unv',
+      userEmail: 'unv@example.com',
+      userName: 'Unverified Rider',
+      bikeModel: 'Click 125i',
+      paymentMethod: 'gcash',
+      referenceNumber: '9001827364512',
+      referenceHash: 'hash-1',
+      amountPhp: 49,
+      status: 'pending_approval',
+      submittedAt: '2026-11-11T10:00:00Z',
+    },
+    new Map(),
+    refsAfter,
+    userBefore,
+    userAfter
+  );
+  assert(!allowed, 'Unverified email was permitted to create a payment submission');
+  console.log('✓ SCENARIO 32 PASS: Unverified email cannot create a payment submission.');
+}
+
+// SCENARIO 33: User cannot create a new payment submission if pendingSubmissionId is already set
+{
+  const verified: MockAuth = { uid: 'rider-ver', token: { email: 'ver@example.com', email_verified: true } };
+  const refsAfter = new Map([['hash-2', { data: { id: 'hash-2', status: 'reserved', submissionId: 'sub-2' } }]]);
+  const userWithPending: MockDoc = { data: { id: 'rider-ver', pendingSubmissionId: 'sub-1' } };
+  const userAfter: MockDoc = { data: { id: 'rider-ver', pendingSubmissionId: 'sub-2' } };
+  const allowed = evalAllowCreatePaymentSubmission(
+    verified,
+    'sub-2',
+    {
+      id: 'sub-2',
+      userId: 'rider-ver',
+      userEmail: 'ver@example.com',
+      userName: 'Verified Rider',
+      bikeModel: 'Click 125i',
+      paymentMethod: 'gcash',
+      referenceNumber: '9001827364599',
+      referenceHash: 'hash-2',
+      amountPhp: 49,
+      status: 'pending_approval',
+      submittedAt: '2026-11-11T10:05:00Z',
+    },
+    new Map(),
+    refsAfter,
+    userWithPending,
+    userAfter
+  );
+  assert(!allowed, 'User created a second payment submission while one was already pending');
+  console.log('✓ SCENARIO 33 PASS: User cannot create a second payment submission while pendingSubmissionId is set.');
+}
+
 console.log('\n========================================================================');
-console.log(' ALL 25 TARGETED VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS');
+console.log(' ALL 33 TARGETED VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS');
 console.log('========================================================================');
 process.exit(0);
-

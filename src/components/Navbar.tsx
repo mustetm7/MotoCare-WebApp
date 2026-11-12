@@ -12,6 +12,8 @@ import {
   Sun,
   Moon,
   FileText,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -27,6 +29,8 @@ import {
   generatePrintableMaintenancePdfReport,
 } from '../utils/storage';
 import { useAuth } from '../context/AuthContext';
+import { OWNER_ADMIN_EMAIL } from '../utils/firebase';
+import { permanentlyDeleteUserAccount } from '../utils/firestoreService';
 
 interface NavbarProps {
   activeTab: ActiveTab;
@@ -55,6 +59,7 @@ interface NavbarProps {
   serviceRecords?: ServiceRecord[];
   reminders?: MaintenanceReminder[];
   onDownloadPdfReport?: () => void;
+  onDeleteAccount?: (password?: string) => Promise<void>;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -83,15 +88,27 @@ export const Navbar: React.FC<NavbarProps> = ({
   serviceRecords = [],
   reminders = [],
   onDownloadPdfReport,
+  onDeleteAccount,
 }) => {
-  const { user, hasProAccess: contextHasProAccess, signIn, signOut } = useAuth();
+  const { user, hasProAccess: contextHasProAccess, signIn, signOut, deleteAccount } = useAuth();
   const isExactAdmin =
     Boolean(user) &&
-    user?.email?.toLowerCase() === 'mustetm7@gmail.com' &&
+    user?.email?.toLowerCase() === OWNER_ADMIN_EMAIL &&
     user?.emailVerified === true;
+  const requiresPasswordForDelete = Boolean(
+    user?.providerData &&
+      Array.isArray(user.providerData) &&
+      user.providerData.some((p) => p?.providerId === 'password')
+  );
+
   const [bikeMenuOpen, setBikeMenuOpen] = React.useState(false);
   const [bellOpen, setBellOpen] = React.useState(false);
   const [userMenuOpen, setUserMenuOpen] = React.useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = React.useState(false);
+  const [doubleConfirmChecked, setDoubleConfirmChecked] = React.useState(false);
+  const [deletePassword, setDeletePassword] = React.useState('');
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [isDeletingAccount, setIsDeletingAccount] = React.useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = React.useState(false);
   const [localTheme, setLocalTheme] = React.useState<ThemeMode>(() => loadThemePreference());
   const currentTheme = propTheme ?? localTheme;
@@ -132,6 +149,51 @@ export const Navbar: React.FC<NavbarProps> = ({
       onDownloadPdfReport();
     } else {
       generatePrintableMaintenancePdfReport(activeBike, serviceRecords, reminders);
+    }
+  };
+
+  const handleOpenDeleteAccountModal = () => {
+    sounds.playClick();
+    setDoubleConfirmChecked(false);
+    setDeletePassword('');
+    setDeleteError(null);
+    setConfirmDeleteOpen(true);
+    setSettingsMenuOpen(false);
+    setUserMenuOpen(false);
+  };
+
+  const handleExecuteDeleteAccount = async () => {
+    if (isDeletingAccount) return;
+    setDeleteError(null);
+    if (requiresPasswordForDelete && !deletePassword.trim()) {
+      setDeleteError('Please enter your current password to confirm permanent account deletion.');
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    try {
+      const passwordArg = deletePassword.trim() || undefined;
+      if (onDeleteAccount) {
+        await onDeleteAccount(passwordArg);
+      } else if (deleteAccount) {
+        await deleteAccount(passwordArg);
+      } else if (user) {
+        await permanentlyDeleteUserAccount(user, passwordArg);
+      }
+      setConfirmDeleteOpen(false);
+      setDoubleConfirmChecked(false);
+      setDeletePassword('');
+      setDeleteError(null);
+      setUserMenuOpen(false);
+      setSettingsMenuOpen(false);
+    } catch (err: any) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Failed to delete account. Please re-authenticate and try again.';
+      setDeleteError(msg);
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -293,6 +355,23 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span>Download PDF Report</span>
                     </button>
                   </div>
+
+                  {/* Delete Account in Application User Settings */}
+                  {user && (
+                    <div className="pt-1.5 border-t border-slate-100">
+                      <button
+                        type="button"
+                        data-testid="settings-delete-account-btn"
+                        onClick={handleOpenDeleteAccountModal}
+                        title="Permanently Delete Account"
+                        aria-label="Delete Account from Settings"
+                        className="w-full py-2 px-3 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Account</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -474,7 +553,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       onOpenAdminPortal();
                     }}
                     className="px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg sm:rounded-xl bg-gradient-to-r from-amber-500 to-[#FF6B00] hover:from-amber-600 hover:to-[#e05e00] text-slate-950 font-black text-[10px] sm:text-xs flex items-center gap-1 shadow-md shadow-orange-500/25 transition-all shrink-0 cursor-pointer active:scale-95"
-                    title="Open MotoCare Owner & Admin Portal"
+                    title="Administrator access only"
                   >
                     <ShieldCheck className="w-3.5 h-3.5 text-slate-950 shrink-0" />
                     <span>Admin</span>
@@ -612,7 +691,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                             <span>Admin Console</span>
                           </div>
                           <span className="text-[9px] bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">
-                            Owner
+                            Admin
                           </span>
                         </button>
                       )}
@@ -621,12 +700,28 @@ export const Navbar: React.FC<NavbarProps> = ({
                         type="button"
                         onClick={() => {
                           setUserMenuOpen(false);
+                          setConfirmDeleteOpen(false);
                           signOut();
                         }}
-                        className="w-full py-1.5 text-center text-xs font-bold text-red-600 hover:bg-red-50 rounded-xl transition-colors cursor-pointer"
+                        className="w-full py-1.5 text-center text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
                       >
                         Sign Out
                       </button>
+
+                      {/* Permanent Account Deletion */}
+                      <div className="pt-1.5 border-t border-slate-100">
+                        <button
+                          type="button"
+                          data-testid="profile-delete-account-btn"
+                          onClick={handleOpenDeleteAccountModal}
+                          title="Permanently Delete Account"
+                          aria-label="Permanently Delete Account"
+                          className="w-full py-1.5 px-2 text-center text-[11px] font-bold text-red-600 hover:bg-red-50 rounded-xl transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Account</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -729,6 +824,145 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Double-Confirmation Modal Dialog for Permanent Account Deletion */}
+      {confirmDeleteOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-account-dialog-title"
+          data-testid="delete-account-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+        >
+          <div
+            data-testid="confirm-delete-account-box"
+            className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-red-100 p-6 space-y-4 text-left"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2
+                    id="delete-account-dialog-title"
+                    className="text-base font-black text-slate-900"
+                  >
+                    Permanently Delete Account?
+                  </h2>
+                  <p className="text-[11px] font-bold text-red-600 uppercase tracking-wider">
+                    Double Confirmation Required
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isDeletingAccount}
+                onClick={() => {
+                  setConfirmDeleteOpen(false);
+                  setDoubleConfirmChecked(false);
+                  setDeletePassword('');
+                  setDeleteError(null);
+                }}
+                title="Close dialog"
+                aria-label="Close delete account dialog"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 space-y-2 text-xs text-red-900 leading-relaxed">
+              <p className="font-extrabold">
+                All data (motorcycles, service records, reminders) will be permanently removed and cannot be restored.
+              </p>
+              <p className="font-medium text-red-800">
+                While you can register again later using the same email address, your previous data cannot be restored.
+              </p>
+            </div>
+
+            {requiresPasswordForDelete && (
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="delete-account-password"
+                  className="block text-[11px] font-bold text-slate-700"
+                >
+                  Confirm Current Password
+                </label>
+                <input
+                  id="delete-account-password"
+                  type="password"
+                  data-testid="delete-account-password-input"
+                  value={deletePassword}
+                  onChange={(e) => {
+                    setDeletePassword(e.target.value);
+                    if (deleteError) setDeleteError(null);
+                  }}
+                  placeholder="Enter your password to re-authenticate"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 focus:outline-none focus:border-red-500"
+                />
+              </div>
+            )}
+
+            <label
+              htmlFor="delete-account-double-confirm"
+              className="flex items-start gap-2.5 p-3 rounded-2xl bg-slate-50 border border-slate-200 cursor-pointer select-none"
+            >
+              <input
+                id="delete-account-double-confirm"
+                type="checkbox"
+                data-testid="delete-account-double-confirm-checkbox"
+                checked={doubleConfirmChecked}
+                onChange={(e) => setDoubleConfirmChecked(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer"
+              />
+              <span className="text-xs font-bold text-slate-700 leading-snug">
+                I understand that all my motorcycles, service records, and reminders will be permanently removed and cannot be restored.
+              </span>
+            </label>
+
+            {deleteError && (
+              <div
+                role="alert"
+                data-testid="delete-account-error-message"
+                className="p-2.5 rounded-xl bg-red-100 border border-red-300 text-red-800 text-xs font-bold"
+              >
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                data-testid="cancel-delete-account-btn"
+                disabled={isDeletingAccount}
+                onClick={() => {
+                  setConfirmDeleteOpen(false);
+                  setDoubleConfirmChecked(false);
+                  setDeletePassword('');
+                  setDeleteError(null);
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-permanent-delete-account-btn"
+                disabled={
+                  !doubleConfirmChecked ||
+                  isDeletingAccount ||
+                  (requiresPasswordForDelete && !deletePassword.trim())
+                }
+                onClick={handleExecuteDeleteAccount}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white font-extrabold text-xs shadow-md shadow-red-600/20 transition-colors cursor-pointer"
+              >
+                {isDeletingAccount ? 'Deleting Account...' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

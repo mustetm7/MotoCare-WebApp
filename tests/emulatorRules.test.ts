@@ -15,7 +15,7 @@
  * 9. Free user modifying another user's bikeCount -> DENY
  * 10. Active Pro user (with native Firestore Timestamp expiryDate) creating multiple motorcycles -> ALLOW
  * 11. Expired Pro user creating 2nd motorcycle -> DENY
- * 12. Verified Admin (mustetm7@gmail.com, email_verified: true) reconciling bikeCount -> ALLOW
+ * 12. Verified Admin reconciling bikeCount -> ALLOW
  *
  * PART B — cloudVersion, Legacy Initialization & Parent Motorcycle Ownership Rules (Scenarios 13–24):
  * 13. Create motorcycle/reminder/serviceRecord with cloudVersion == 1 -> ALLOW
@@ -30,6 +30,16 @@
  * 22. Cross-user read/update/delete attempts on motorcycles, reminders, and serviceRecords -> DENY
  * 23. Reminder or serviceRecord referencing another user's or nonexistent parent motorcycle -> DENY
  * 24. Malformed legacy cloudVersion (string, float, 0, negative) on update -> DENY
+ *
+ * PART C — Quota Bypass Prevention, Payment Hardening & Schema Allow-Lists (Scenarios 25–32):
+ * 25. Owner cannot delete users/{uid} while bikeCount > 0 -> DENY
+ * 26. Recreating profile after a legal delete (bikeCount == 0) cannot give more than the free quota -> DENY
+ * 27. Cannot create a paymentReferences doc for someone else's submission -> DENY
+ * 28. Non-admin cannot get paymentReferences -> DENY
+ * 29. Unknown extra fields rejected on motorcycles, reminders, and serviceRecords -> DENY
+ * 30. Owner cannot delete an approved payment submission (only pending_approval) -> DENY
+ * 31. Unverified email cannot create a payment submission -> DENY
+ * 32. User cannot create a second payment submission while pendingSubmissionId is set -> DENY
  *
  * HOW TO RUN (Requires Java Runtime Environment JRE 11+):
  *   firebase emulators:exec --project demo-motocare-test --only firestore "npx tsx tests/emulatorRules.test.ts"
@@ -57,7 +67,7 @@ export async function runRulesEmulatorSuite(): Promise<{
   console.log('------------------------------------------------------------');
   console.log('MotoCare Firestore Security Rules Emulator Test Suite');
   console.log(`Target Demo Project: ${DEMO_PROJECT_ID} (Port 8080)`);
-  console.log('Testing 24 Quota, Anti-Replay, RBAC & cloudVersion Scenarios');
+  console.log('Testing 32 Quota, Anti-Replay, RBAC, Payment & Schema Scenarios');
   console.log('------------------------------------------------------------');
 
   if (!fs.existsSync(RULES_PATH)) {
@@ -142,8 +152,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/rider_1'), {
         id: 'rider_1',
-        role: 'rider',
-        subscriptionTier: 'free',
         bikeCount: 1,
         lastBikeId: 'bike_1',
         lastBikeAction: 'create',
@@ -192,8 +200,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/rider_2'), {
         id: 'rider_2',
-        role: 'rider',
-        subscriptionTier: 'free',
         bikeCount: 2,
         lastBikeId: 'bike_2',
         lastBikeAction: 'create',
@@ -293,8 +299,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/rider_5'), {
         id: 'rider_5',
-        role: 'rider',
-        subscriptionTier: 'free',
         bikeCount: 2,
         lastBikeId: 'bike_5',
         lastBikeAction: 'create',
@@ -380,8 +384,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/rider_7'), {
         id: 'rider_7',
-        role: 'rider',
-        subscriptionTier: 'free',
         bikeCount: 1,
         lastBikeId: 'bike_7_pre_existing',
         lastBikeAction: 'create',
@@ -413,8 +415,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       batch.delete(db.doc('motorcycles/bike_non_existent'));
       batch.update(db.doc('users/rider_8'), {
         id: 'rider_8',
-        role: 'rider',
-        subscriptionTier: 'free',
         bikeCount: 0,
         lastBikeId: 'bike_non_existent',
         lastBikeAction: 'delete',
@@ -491,8 +491,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/pro_rider'), {
         id: 'pro_rider',
-        role: 'rider',
-        subscriptionTier: 'pro',
         bikeCount: 2,
         lastBikeId: 'pro_bike_2',
         lastBikeAction: 'create',
@@ -543,8 +541,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/expired_pro'), {
         id: 'expired_pro',
-        role: 'rider',
-        subscriptionTier: 'pro',
         bikeCount: 2,
         lastBikeId: 'expired_bike_2',
         lastBikeAction: 'create',
@@ -614,8 +610,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       batch.update(db.doc('users/rider_cv'), {
         id: 'rider_cv',
-        role: 'rider',
-        subscriptionTier: 'free',
         bikeCount: 1,
         lastBikeId: 'bike_cv_1',
         lastBikeAction: 'create',
@@ -676,7 +670,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       const db = ctx.firestore();
 
-      // Missing cloudVersion on reminder create
       await assertFails(
         db.doc('reminders/rem_no_cv').set({
           id: 'rem_no_cv',
@@ -688,7 +681,6 @@ export async function runRulesEmulatorSuite(): Promise<{
         })
       );
 
-      // Missing cloudVersion on serviceRecord create
       await assertFails(
         db.doc('serviceRecords/rec_no_cv').set({
           id: 'rec_no_cv',
@@ -949,7 +941,6 @@ export async function runRulesEmulatorSuite(): Promise<{
       });
       const db = riderBCtx.firestore();
 
-      // Rider B attempting to create a reminder referencing Rider A's motorcycle
       await assertFails(
         db.doc('reminders/rem_foreign_bike').set({
           id: 'rem_foreign_bike',
@@ -962,7 +953,6 @@ export async function runRulesEmulatorSuite(): Promise<{
         })
       );
 
-      // Rider B attempting to create a serviceRecord referencing Rider A's motorcycle
       await assertFails(
         db.doc('serviceRecords/rec_foreign_bike').set({
           id: 'rec_foreign_bike',
@@ -1003,6 +993,350 @@ export async function runRulesEmulatorSuite(): Promise<{
           cloudVersion: 2,
         })
       );
+    });
+
+    // =========================================================================
+    // PART C: QUOTA BYPASS PREVENTION, PAYMENT HARDENING & ALLOW-LISTS (25–32)
+    // =========================================================================
+
+    await testCase('25. Owner cannot delete users/{uid} while bikeCount > 0 -> DENY', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('users/rider_bypass_attempt').set({
+          id: 'rider_bypass_attempt',
+          uid: 'rider_bypass_attempt',
+          email: 'bypass@example.com',
+          role: 'rider',
+          subscriptionTier: 'free',
+          bikeCount: 1,
+        });
+      });
+
+      const ctx = testEnv.authenticatedContext('rider_bypass_attempt', {
+        email: 'bypass@example.com',
+        email_verified: true,
+      });
+      const db = ctx.firestore();
+
+      await assertFails(db.doc('users/rider_bypass_attempt').delete());
+    });
+
+    await testCase('26. Recreating profile after a legal delete (bikeCount == 0) cannot give more than the free quota', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('users/rider_legal_del').set({
+          id: 'rider_legal_del',
+          uid: 'rider_legal_del',
+          email: 'legal@example.com',
+          role: 'rider',
+          subscriptionTier: 'free',
+          bikeCount: 0,
+        });
+      });
+
+      const ctx = testEnv.authenticatedContext('rider_legal_del', {
+        email: 'legal@example.com',
+        email_verified: true,
+      });
+      const db = ctx.firestore();
+
+      // Legal delete when bikeCount == 0 succeeds
+      await assertSucceeds(db.doc('users/rider_legal_del').delete());
+
+      // Recreate user doc with bikeCount: 0 succeeds
+      await assertSucceeds(
+        db.doc('users/rider_legal_del').set({
+          id: 'rider_legal_del',
+          uid: 'rider_legal_del',
+          email: 'legal@example.com',
+          role: 'rider',
+          subscriptionTier: 'free',
+          bikeCount: 0,
+        })
+      );
+
+      // Add 1st bike succeeds
+      const batch1 = db.batch();
+      batch1.set(db.doc('motorcycles/bike_leg_1'), {
+        id: 'bike_leg_1',
+        userId: 'rider_legal_del',
+        brand: 'Honda',
+        model: 'Click 125i',
+        year: 2025,
+        odometer: 100,
+        cloudVersion: 1,
+      });
+      batch1.update(db.doc('users/rider_legal_del'), {
+        id: 'rider_legal_del',
+        bikeCount: 1,
+        lastBikeId: 'bike_leg_1',
+        lastBikeAction: 'create',
+      });
+      await assertSucceeds(batch1.commit());
+
+      // Attempting to delete user doc while bikeCount == 1 fails
+      await assertFails(db.doc('users/rider_legal_del').delete());
+
+      // Attempting to add 2nd bike fails
+      const batch2 = db.batch();
+      batch2.set(db.doc('motorcycles/bike_leg_2'), {
+        id: 'bike_leg_2',
+        userId: 'rider_legal_del',
+        brand: 'Yamaha',
+        model: 'NMAX 155',
+        year: 2025,
+        odometer: 50,
+        cloudVersion: 1,
+      });
+      batch2.update(db.doc('users/rider_legal_del'), {
+        id: 'rider_legal_del',
+        bikeCount: 2,
+        lastBikeId: 'bike_leg_2',
+        lastBikeAction: 'create',
+      });
+      await assertFails(batch2.commit());
+    });
+
+    await testCase("27. Cannot create a paymentReferences doc for someone else's submission -> DENY", async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('paymentSubmissions/sub_victim').set({
+          id: 'sub_victim',
+          userId: 'victim_uid',
+          userEmail: 'victim@example.com',
+          userName: 'Victim Rider',
+          bikeModel: 'Click 125i',
+          paymentMethod: 'gcash',
+          referenceNumber: '900111222333',
+          referenceHash: 'hash_victim_123',
+          amountPhp: 49,
+          status: 'pending_approval',
+          submittedAt: '2026-11-11T10:00:00.000Z',
+        });
+      });
+
+      const attackerCtx = testEnv.authenticatedContext('attacker_uid', {
+        email: 'attacker@example.com',
+        email_verified: true,
+      });
+      const db = attackerCtx.firestore();
+
+      await assertFails(
+        db.doc('paymentReferences/hash_victim_123').set({
+          id: 'hash_victim_123',
+          status: 'reserved',
+          createdAt: '2026-11-11T10:00:00.000Z',
+          submissionId: 'sub_victim',
+        })
+      );
+    });
+
+    await testCase('28. Non-admin cannot get paymentReferences -> DENY', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('paymentReferences/hash_secret_999').set({
+          id: 'hash_secret_999',
+          status: 'reserved',
+          createdAt: '2026-11-11T10:00:00.000Z',
+          submissionId: 'sub_999',
+        });
+      });
+
+      const riderCtx = testEnv.authenticatedContext('rider_normal', {
+        email: 'rider@example.com',
+        email_verified: true,
+      });
+      const db = riderCtx.firestore();
+
+      await assertFails(db.doc('paymentReferences/hash_secret_999').get());
+    });
+
+    await testCase('29. Unknown extra fields rejected on motorcycles, reminders, and serviceRecords -> DENY', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('users/rider_schema').set({
+          id: 'rider_schema',
+          uid: 'rider_schema',
+          email: 'schema@example.com',
+          role: 'rider',
+          subscriptionTier: 'free',
+          bikeCount: 1,
+        });
+        await db.doc('motorcycles/bike_schema_1').set({
+          id: 'bike_schema_1',
+          userId: 'rider_schema',
+          brand: 'Honda',
+          model: 'Click 125i',
+          year: 2024,
+          odometer: 1000,
+          cloudVersion: 1,
+        });
+      });
+
+      const ctx = testEnv.authenticatedContext('rider_schema', {
+        email: 'schema@example.com',
+        email_verified: true,
+      });
+      const db = ctx.firestore();
+
+      // Extra unknown field on motorcycle update
+      await assertFails(
+        db.doc('motorcycles/bike_schema_1').update({
+          odometer: 1200,
+          cloudVersion: 2,
+          injectedAdminFlag: true,
+        })
+      );
+
+      // Extra unknown field on reminder create
+      await assertFails(
+        db.doc('reminders/rem_extra_field').set({
+          id: 'rem_extra_field',
+          userId: 'rider_schema',
+          bikeId: 'bike_schema_1',
+          title: 'Oil Change',
+          intervalKm: 1500,
+          nextDueOdo: 2500,
+          cloudVersion: 1,
+          unknownField: 'malicious',
+        })
+      );
+
+      // Extra unknown field on serviceRecord create
+      await assertFails(
+        db.doc('serviceRecords/rec_extra_field').set({
+          id: 'rec_extra_field',
+          userId: 'rider_schema',
+          bikeId: 'bike_schema_1',
+          title: 'Oil Change',
+          date: '2026-11-11',
+          odometer: 1000,
+          totalCostPhp: 450,
+          cloudVersion: 1,
+          hackPayload: 'xyz',
+        })
+      );
+    });
+
+    await testCase('30. Owner cannot delete an approved payment submission -> DENY', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('paymentSubmissions/sub_approved_1').set({
+          id: 'sub_approved_1',
+          userId: 'rider_pay',
+          userEmail: 'pay@example.com',
+          userName: 'Pay Rider',
+          bikeModel: 'NMAX 155',
+          paymentMethod: 'gcash',
+          referenceNumber: '9001827364512',
+          referenceHash: 'hash_approved_1',
+          amountPhp: 49,
+          status: 'active_pro',
+          submittedAt: '2026-11-11T10:00:00.000Z',
+        });
+      });
+
+      const ctx = testEnv.authenticatedContext('rider_pay', {
+        email: 'pay@example.com',
+        email_verified: true,
+      });
+      const db = ctx.firestore();
+
+      await assertFails(db.doc('paymentSubmissions/sub_approved_1').delete());
+    });
+
+    await testCase('31. Unverified email cannot create a payment submission -> DENY', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('users/rider_unverified').set({
+          id: 'rider_unverified',
+          uid: 'rider_unverified',
+          email: 'unverified@example.com',
+          role: 'rider',
+          subscriptionTier: 'free',
+          bikeCount: 0,
+          pendingSubmissionId: null,
+        });
+      });
+
+      const unverifiedCtx = testEnv.authenticatedContext('rider_unverified', {
+        email: 'unverified@example.com',
+        email_verified: false,
+      });
+      const db = unverifiedCtx.firestore();
+
+      const batch = db.batch();
+      batch.set(db.doc('paymentReferences/hash_unv_1'), {
+        id: 'hash_unv_1',
+        status: 'reserved',
+        createdAt: '2026-11-11T10:00:00.000Z',
+        submissionId: 'sub_unv_1',
+      });
+      batch.set(db.doc('paymentSubmissions/sub_unv_1'), {
+        id: 'sub_unv_1',
+        userId: 'rider_unverified',
+        userEmail: 'unverified@example.com',
+        userName: 'Unverified Rider',
+        bikeModel: 'Click 125i',
+        paymentMethod: 'gcash',
+        referenceNumber: '9001827364512',
+        referenceHash: 'hash_unv_1',
+        amountPhp: 49,
+        status: 'pending_approval',
+        submittedAt: '2026-11-11T10:00:00.000Z',
+      });
+      batch.update(db.doc('users/rider_unverified'), {
+        pendingSubmissionId: 'sub_unv_1',
+      });
+
+      await assertFails(batch.commit());
+    });
+
+    await testCase('32. User cannot create a second payment submission while pendingSubmissionId is already set -> DENY', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('users/rider_spam').set({
+          id: 'rider_spam',
+          uid: 'rider_spam',
+          email: 'spam@example.com',
+          role: 'rider',
+          subscriptionTier: 'free',
+          bikeCount: 0,
+          pendingSubmissionId: 'sub_existing_pending',
+        });
+      });
+
+      const ctx = testEnv.authenticatedContext('rider_spam', {
+        email: 'spam@example.com',
+        email_verified: true,
+      });
+      const db = ctx.firestore();
+
+      const batch = db.batch();
+      batch.set(db.doc('paymentReferences/hash_spam_2'), {
+        id: 'hash_spam_2',
+        status: 'reserved',
+        createdAt: '2026-11-11T10:05:00.000Z',
+        submissionId: 'sub_spam_2',
+      });
+      batch.set(db.doc('paymentSubmissions/sub_spam_2'), {
+        id: 'sub_spam_2',
+        userId: 'rider_spam',
+        userEmail: 'spam@example.com',
+        userName: 'Spam Rider',
+        bikeModel: 'Click 125i',
+        paymentMethod: 'gcash',
+        referenceNumber: '9009998887771',
+        referenceHash: 'hash_spam_2',
+        amountPhp: 49,
+        status: 'pending_approval',
+        submittedAt: '2026-11-11T10:05:00.000Z',
+      });
+      batch.update(db.doc('users/rider_spam'), {
+        pendingSubmissionId: 'sub_spam_2',
+      });
+
+      await assertFails(batch.commit());
     });
   } finally {
     await testEnv.cleanup();

@@ -1961,5 +1961,71 @@ export function inspectLegacyDataDryRun(params: {
   };
 }
 
+/**
+ * Purges all local storage caches, sync queues, migration ledgers/backups, and unscoped
+ * session data associated with a permanently deleted user account.
+ *
+ * IMPORTANT: Never retains a blacklist, tombstone, or email-based registration restriction,
+ * ensuring the deleted user can return and register a fresh account with the same email anytime.
+ */
+export function purgeDeletedUserAccountLocalData(
+  userId: string,
+  userEmail?: string | null
+): void {
+  try {
+    if (userId) {
+      localStorage.removeItem(getUserScopedKey(userId, 'motorcycles'));
+      localStorage.removeItem(getUserScopedKey(userId, 'reminders'));
+      localStorage.removeItem(getUserScopedKey(userId, 'records'));
+      localStorage.removeItem(getUserScopedKey(userId, 'active_bike_id'));
+      localStorage.removeItem(getPreMigrationBackupKey(userId));
+      localStorage.removeItem(getMigrationLedgerKey(userId));
+      localStorage.removeItem(getOfflineMutationQueueKey(userId));
+      localStorage.removeItem(getQuarantinedMutationQueueKey(userId));
+      localStorage.removeItem(getCloudSyncLogKey(userId));
+      localStorage.removeItem(`motocare_known_cloud_versions_v1_${userId}`);
+    }
+
+    // Clear unscoped session/legacy keys so old motorcycles, reminders, or service records
+    // cannot automatically reappear or trigger migration when re-registering on the same device
+    localStorage.removeItem(STORAGE_KEYS.MOTORCYCLES);
+    localStorage.removeItem(STORAGE_KEYS.REMINDERS);
+    localStorage.removeItem(STORAGE_KEYS.SERVICE_RECORDS);
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_BIKE_ID);
+    localStorage.removeItem(STORAGE_KEYS.SUBSCRIPTION);
+    localStorage.removeItem('motocare_motorcycles_v4');
+    localStorage.removeItem('motocare_reminders_v4');
+    localStorage.removeItem('motocare_records_v4');
+    localStorage.removeItem('motocare_active_bike_id_v4');
+    localStorage.removeItem('motocare_remembered_email');
+
+    // Remove the deleted account's entry from local user accounts list (if present)
+    // without storing any ban or email restriction
+    const rawAccounts = localStorage.getItem(STORAGE_KEYS.USER_ACCOUNTS);
+    if (rawAccounts) {
+      const parsed = JSON.parse(rawAccounts);
+      if (Array.isArray(parsed)) {
+        const normalizedEmail = userEmail?.trim().toLowerCase();
+        const filtered = parsed.filter((acc: any) => {
+          if (!acc) return false;
+          if (userId && acc.id === userId) return false;
+          if (
+            normalizedEmail &&
+            typeof acc.email === 'string' &&
+            acc.email.trim().toLowerCase() === normalizedEmail
+          ) {
+            return false;
+          }
+          return true;
+        });
+        localStorage.setItem(STORAGE_KEYS.USER_ACCOUNTS, JSON.stringify(filtered));
+      }
+    }
+  } catch (err) {
+    console.error('Failed to purge deleted user local data', err);
+  }
+}
+
+
 
 

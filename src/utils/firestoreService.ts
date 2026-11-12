@@ -1,2939 +1,1603 @@
 import {
   collection,
   doc,
+  setDoc,
   getDoc,
   getDocs,
-  setDoc,
   updateDoc,
   deleteDoc,
+  onSnapshot,
   query,
   where,
-  onSnapshot,
-  runTransaction,
-  writeBatch,
-  Timestamp,
+  limit,
+  startAfter,
   serverTimestamp,
+  writeBatch,
+  runTransaction,
+  Timestamp,
+  QueryDocumentSnapshot,
+  DocumentData,
 } from 'firebase/firestore';
-import { db, auth, handleFirestoreError, OperationType } from './firebase';
-import { User } from 'firebase/auth';
+import {
+  db,
+  auth,
+  OWNER_ADMIN_EMAIL,
+  OperationType,
+  handleFirestoreError,
+  User,
+  reauthenticateUserForDeletion,
+  deleteCurrentAuthUser,
+} from './firebase';
 import {
   Motorcycle,
   MaintenanceReminder,
   ServiceRecord,
-  UserSubscription,
-  PaymentMethod,
-  MigrationLedger,
-  SyncConflictItem,
+  PaymentSubmissionRecord,
+  PaymentProvider,
   OfflineMutationItem,
-  OfflineMutationEntity,
-  OfflineMutationAction,
-  QuarantinedMutationItem,
-  MutationFailureClassification,
+  MigrationLedger,
+  CloudSyncStatus,
 } from '../types';
 import {
-  CONFIRMED_SAMPLE_MOTORCYCLE_IDS,
-  CONFIRMED_SAMPLE_REMINDER_IDS,
-  CONFIRMED_SAMPLE_SERVICE_RECORD_IDS,
-  createImmutablePreMigrationBackup,
-  getPreMigrationBackupKey,
-  loadMigrationLedger,
-  saveMigrationLedger,
-  resolveMotorcycleConflict,
-  parseTimestampToMillis,
+  purgeDeletedUserAccountLocalData,
   getOfflineMutationQueue,
   saveOfflineMutationQueue,
   enqueueOfflineMutation,
   removeOfflineMutation,
-  classifyMutationFailure,
-  quarantineOfflineMutation,
   getQuarantinedMutationQueue,
+  quarantineOfflineMutation,
   requeueQuarantinedMutation,
-  recordCloudSyncOperation,
-  saveUserScopedMotorcycles,
-  saveUserScopedReminders,
-  saveUserScopedServiceRecords,
+  classifyMutationFailure,
   getKnownCloudVersion,
   getKnownCloudRevision,
   recordKnownCloudVersion,
   removeKnownCloudVersion,
+  recordCloudSyncOperation,
+  createImmutablePreMigrationBackup,
+  loadMigrationLedger,
+  saveMigrationLedger,
+  getPreMigrationBackupKey,
+  parseTimestampToMillis,
+  CONFIRMED_SAMPLE_MOTORCYCLE_IDS,
+  CONFIRMED_SAMPLE_REMINDER_IDS,
+  CONFIRMED_SAMPLE_SERVICE_RECORD_IDS,
 } from './storage';
-
-export interface PaymentSubmission {
-  id: string;
-  userId: string;
-  userEmail: string;
-  userName: string;
-  bikeModel: string;
-  bikePlate?: string;
-  paymentMethod: PaymentMethod;
-  referenceNumber: string;
-  referenceHash: string;
-  amountPhp: number;
-  status: 'pending_approval' | 'active_pro' | 'rejected';
-  submittedAt: string;
-  reviewedAt?: string;
-  reviewedBy?: string;
-  approvedAt?: string;
-  approvedBy?: string;
-  subscriptionStartDate?: string;
-  subscriptionEndDate?: string;
-  notes?: string;
-}
-
-export function normalizePaymentRef(rawRef: string): string {
-  return rawRef.trim().toUpperCase().replace(/[\s-]/g, '');
-}
-
-export function normalizePaymentProvider(provider: string): 'gcash' | 'gotyme' {
-  const p = provider.trim().toLowerCase();
-  if (p === 'gotyme' || p === 'gotyme bank') return 'gotyme';
-  return 'gcash';
-}
-
-// Compute deterministic SHA-256 hash of provider + normalized reference
-export async function computePaymentRefHash(provider: string, normalizedRef: string): Promise<string> {
-  const message = `${provider.toLowerCase()}_${normalizedRef.toUpperCase()}`;
-  const msgUint8 = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-// 1. User Profile & Subscription Sync
-let pendingProfileSyncRetry = false;
-
-export async function syncUserProfile(user: User, isRetry = false): Promise<void> {
-  const path = `users/${user.uid}`;
-  try {
-    const userDocRef = doc(db, 'users', user.uid);
-    const existing = await getDoc(userDocRef);
-
-    const isVerifiedOwner =
-      user.email?.toLowerCase() === 'mustetm7@gmail.com' && user.emailVerified === true;
-
-    if (!existing.exists()) {
-      await setDoc(userDocRef, {
-        id: user.uid,
-        uid: user.uid,
-        email: user.email || '',
-        displayName: user.displayName || 'MotoCare Rider',
-        photoURL: user.photoURL || '',
-        role: isVerifiedOwner ? 'admin' : 'rider',
-        subscriptionTier: 'free',
-        subscriptionStatus: 'free',
-        paymentStatus: 'unpaid_free',
-        bikeCount: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-
-      // If verified owner, bootstrap admin document
-      if (isVerifiedOwner) {
-        await setDoc(doc(db, 'admins', user.uid), {
-          email: user.email,
-          role: 'owner',
-          createdAt: new Date().toISOString(),
-        });
-      }
-    } else {
-      await updateDoc(userDocRef, {
-        displayName: user.displayName || existing.data().displayName || 'MotoCare Rider',
-        photoURL: user.photoURL || existing.data().photoURL || '',
-        updatedAt: new Date().toISOString(),
-      });
-    }
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    const isTransientOffline =
-      errMsg.toLowerCase().includes('offline') ||
-      errMsg.toLowerCase().includes('unavailable');
-
-    if (isTransientOffline) {
-      console.warn(
-        'MotoCare: Client is temporarily offline during user profile sync; will retry when online.'
-      );
-      if (!isRetry && !pendingProfileSyncRetry && typeof window !== 'undefined') {
-        pendingProfileSyncRetry = true;
-        const retrySync = () => {
-          window.removeEventListener('online', retrySync);
-          pendingProfileSyncRetry = false;
-          if (auth.currentUser && auth.currentUser.uid === user.uid) {
-            void syncUserProfile(auth.currentUser, true);
-          }
-        };
-        window.addEventListener('online', retrySync);
-        setTimeout(() => {
-          if (pendingProfileSyncRetry && (typeof navigator === 'undefined' || navigator.onLine)) {
-            retrySync();
-          }
-        }, 3500);
-      }
-      return;
-    }
-
-    handleFirestoreError(error, OperationType.WRITE, path);
-  }
-}
-
-// 2. Listen to active User Document (for live subscription status updates)
-export function subscribeToUserDoc(
-  userId: string,
-  onUpdate: (userData: Record<string, unknown> | null) => void
-): () => void {
-  const path = `users/${userId}`;
-  return onSnapshot(
-    doc(db, 'users', userId),
-    (docSnap) => {
-      if (docSnap.exists()) {
-        onUpdate(docSnap.data() as Record<string, unknown>);
-      } else {
-        onUpdate(null);
-      }
-    },
-    (error) => {
-      try {
-        handleFirestoreError(error, OperationType.GET, path);
-      } catch {
-        // Prevent uncaught listener throw in offline mode
-      }
-    }
-  );
-}
-
-// 3. Listen to Rider's Own Latest Payment Submission
-export function subscribeToUserPaymentSubmission(
-  userId: string,
-  callback: (submission: PaymentSubmission | null) => void
-): () => void {
-  const path = 'paymentSubmissions';
-  const q = query(collection(db, 'paymentSubmissions'), where('userId', '==', userId));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const items: PaymentSubmission[] = [];
-      snapshot.forEach((docSnap) => {
-        items.push(docSnap.data() as PaymentSubmission);
-      });
-      items.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-      callback(items.length > 0 ? items[0] : null);
-    },
-    (error) => {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Prevent uncaught listener throw in offline mode
-      }
-    }
-  );
-}
-
-// 4. Submit Payment Reference to Firestore
-// Uses deterministic SHA-256 hash reservation (ZERO personal data in reservation doc).
-// Does NOT touch user profile document to preserve strict field-level protection.
-export async function submitPaymentReferenceToFirestore(data: {
-  userId: string;
-  userEmail: string;
-  userName: string;
-  bikeModel: string;
-  bikePlate?: string;
-  paymentMethod: PaymentMethod;
-  referenceNumber: string;
-  amountPhp?: number;
-}): Promise<string> {
-  const cleanMethod = normalizePaymentProvider(data.paymentMethod);
-  const cleanRef = normalizePaymentRef(data.referenceNumber);
-
-  if (!cleanRef) {
-    throw new Error('Valid payment reference number is required.');
-  }
-
-  // Generate deterministic SHA-256 hash
-  const refHash = await computePaymentRefHash(cleanMethod, cleanRef);
-  const reservationRef = doc(db, 'paymentReferences', refHash);
-
-  const submissionId = `pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const submissionRef = doc(db, 'paymentSubmissions', submissionId);
-
-  try {
-    await runTransaction(db, async (transaction) => {
-      // Step A: Check if this reference reservation exists
-      const existingRefSnap = await transaction.get(reservationRef);
-      if (existingRefSnap.exists()) {
-        throw new Error('This transaction reference number has already been submitted or reserved.');
-      }
-
-      const timestamp = new Date().toISOString();
-
-      // Step B: Atomically create minimal non-personal reference reservation
-      // Contains ONLY hash id, status: 'reserved', and timestamp (NO PII, NO actual ref, NO uid)
-      transaction.set(reservationRef, {
-        id: refHash,
-        status: 'reserved',
-        createdAt: timestamp,
-      });
-
-      // Step C: Atomically create payment submission record
-      const submission: PaymentSubmission = {
-        id: submissionId,
-        userId: data.userId,
-        userEmail: data.userEmail,
-        userName: data.userName,
-        bikeModel: data.bikeModel || 'Motorcycle',
-        bikePlate: data.bikePlate || '',
-        paymentMethod: cleanMethod,
-        referenceNumber: data.referenceNumber.trim(),
-        referenceHash: refHash,
-        amountPhp: 49,
-        status: 'pending_approval',
-        submittedAt: timestamp,
-        notes: `Submitted via ${cleanMethod.toUpperCase()} QRPH. Awaiting owner admin approval.`,
-      };
-
-      transaction.set(submissionRef, submission);
-    });
-
-    return submissionId;
-  } catch (error) {
-    if (error instanceof Error && (
-      error.message.includes('already been submitted') ||
-      error.message.includes('already been registered') ||
-      error.message.includes('required')
-    )) {
-      throw error;
-    }
-    handleFirestoreError(error, OperationType.WRITE, `paymentSubmissions/${submissionId}`);
-  }
-}
-
-// 5. Admin: Subscribe to All Payment Submissions Live
-export function subscribeToAllPaymentSubmissions(
-  callback: (submissions: PaymentSubmission[]) => void
-): () => void {
-  const path = 'paymentSubmissions';
-  return onSnapshot(
-    collection(db, 'paymentSubmissions'),
-    (snapshot) => {
-      const items: PaymentSubmission[] = [];
-      snapshot.forEach((docSnap) => {
-        items.push(docSnap.data() as PaymentSubmission);
-      });
-      items.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-      callback(items);
-    },
-    (error) => {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Prevent uncaught listener throw in offline mode
-      }
-    }
-  );
-}
-
-// --- Asia/Manila Calendar Month & Expiration Utilities ---
-
-/**
- * Returns the calendar day of the month (1-31) in Asia/Manila (UTC+8).
- */
-// --- Asia/Manila Calendar Month & Expiration Utilities ---
-
-/**
- * Safely parses Firestore Timestamp, ISO string, or epoch milliseconds into a Date object.
- */
-export function parseExpiryToDate(val: unknown): Date | null {
-  if (!val) return null;
-  if (typeof (val as any)?.toDate === 'function') {
-    return (val as any).toDate();
-  }
-  if (typeof val === 'string') {
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  if (typeof val === 'number') {
-    return new Date(val);
-  }
-  return null;
-}
-
-/**
- * Returns the calendar day of the month (1-31) in Asia/Manila (UTC+8).
- */
-export function getManilaDay(date: Date): number {
-  const MANILA_OFFSET_MS = 8 * 60 * 60 * 1000;
-  const manilaDate = new Date(date.getTime() + MANILA_OFFSET_MS);
-  return manilaDate.getUTCDate();
-}
-
-/**
- * Calculates the next calendar month expiration in Asia/Manila (UTC+8),
- * strictly preserving the original billingAnchorDay across months of varying lengths.
- *
- * Examples:
- * January 31 -> February 28 (or 29) -> March 31
- * January 15 -> February 15 -> March 15
- */
-export function calculateNextMonthlyExpiry(baseDate: Date, anchorDay: number): {
-  expiryIso: string;
-  expiryTimestamp: Timestamp;
-  targetUtcDate: Date;
-  anchorDay: number;
-} {
-  const MANILA_OFFSET_MS = 8 * 60 * 60 * 1000;
-  const manilaDate = new Date(baseDate.getTime() + MANILA_OFFSET_MS);
-
-  let year = manilaDate.getUTCFullYear();
-  let month = manilaDate.getUTCMonth(); // 0-indexed: 0 = Jan, 11 = Dec
-  const hours = manilaDate.getUTCHours();
-  const minutes = manilaDate.getUTCMinutes();
-  const seconds = manilaDate.getUTCSeconds();
-  const ms = manilaDate.getUTCMilliseconds();
-
-  // Advance by 1 calendar month
-  month += 1;
-  if (month > 11) {
-    month = 0;
-    year += 1;
-  }
-
-  // Determine max days in target month (e.g. 28, 29, 30, or 31)
-  const maxDaysInTargetMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-
-  // Clamp target day to max days while preserving persistent anchorDay
-  const targetDay = Math.min(anchorDay, maxDaysInTargetMonth);
-
-  // Convert back to UTC
-  const targetManilaTimeMs = Date.UTC(year, month, targetDay, hours, minutes, seconds, ms);
-  const targetUtcDate = new Date(targetManilaTimeMs - MANILA_OFFSET_MS);
-
-  return {
-    expiryIso: targetUtcDate.toISOString(),
-    expiryTimestamp: Timestamp.fromDate(targetUtcDate),
-    targetUtcDate,
-    anchorDay,
-  };
-}
-
-/**
- * Calculates remaining days until expiration from a Timestamp, Date, or ISO string.
- */
-export function calculateDaysRemaining(expiry?: unknown): number {
-  const dateObj = parseExpiryToDate(expiry);
-  if (!dateObj) return 0;
-  const diffMs = dateObj.getTime() - Date.now();
-  if (diffMs <= 0) return 0;
-  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-}
-
-// 6. Admin: Approve Pro Access Atomically via runTransaction
-// Performs all reads before writes and commits submission + user tier with native Timestamp atomically.
-export async function approveProAccessInFirestore(
-  submissionId: string,
-  riderUserId: string,
-  adminIdentifier: string = 'Owner Admin'
-): Promise<{
-  subscriptionStartDate: string;
-  expiryDate: string;
-  expiryTimestamp: Timestamp;
-  billingAnchorDay: number;
-}> {
-  const subDocRef = doc(db, 'paymentSubmissions', submissionId);
-  const userDocRef = doc(db, 'users', riderUserId);
-
-  try {
-    const result = await runTransaction(db, async (transaction) => {
-      // Step 1: Read the selected payment submission
-      const subSnap = await transaction.get(subDocRef);
-      if (!subSnap.exists()) {
-        throw new Error('Payment submission not found.');
-      }
-      const currentSub = subSnap.data() as PaymentSubmission;
-
-      // Step 2: Confirm its status is pending_approval (prevents double approval)
-      if (currentSub.status !== 'pending_approval') {
-        throw new Error('This payment submission has already been reviewed.');
-      }
-
-      // Step 3: Read the corresponding rider's user profile
-      const userSnap = await transaction.get(userDocRef);
-      const userData = userSnap.exists() ? userSnap.data() : null;
-
-      // Step 4: Calculate the correct calendar-month subscription expiration
-      const approvalDate = new Date();
-      const approvalIso = approvalDate.toISOString();
-
-      const existingExpiry = parseExpiryToDate(userData?.expiryDate);
-      const isCurrentlyPro = userData?.subscriptionTier === 'pro';
-
-      // Early renewal check: currently Pro AND existing expiryDate is strictly in the future
-      const isEarlyRenewal =
-        isCurrentlyPro && existingExpiry !== null && existingExpiry.getTime() > approvalDate.getTime();
-
-      let subscriptionStartDate: string;
-      let expiryIso: string;
-      let expiryTimestamp: Timestamp;
-      let billingAnchorDay: number;
-
-      if (isEarlyRenewal && existingExpiry) {
-        // Early Renewal: preserve original start date and anchor day, extend from existing expiry
-        subscriptionStartDate = (userData.subscriptionStartDate as string) || approvalIso;
-        billingAnchorDay =
-          typeof userData.billingAnchorDay === 'number'
-            ? userData.billingAnchorDay
-            : getManilaDay(existingExpiry);
-
-        const calc = calculateNextMonthlyExpiry(existingExpiry, billingAnchorDay);
-        expiryIso = calc.expiryIso;
-        expiryTimestamp = calc.expiryTimestamp;
-      } else {
-        // First-Time Activation or Late Renewal (expired):
-        // Start fresh from approval time, set new billingAnchorDay
-        subscriptionStartDate = approvalIso;
-        billingAnchorDay = getManilaDay(approvalDate);
-
-        const calc = calculateNextMonthlyExpiry(approvalDate, billingAnchorDay);
-        expiryIso = calc.expiryIso;
-        expiryTimestamp = calc.expiryTimestamp;
-      }
-
-      // Step 5: Update the payment submission (All writes after all reads)
-      transaction.update(subDocRef, {
-        status: 'active_pro',
-        reviewedAt: approvalIso,
-        approvedAt: approvalIso,
-        reviewedBy: adminIdentifier,
-        approvedBy: adminIdentifier,
-        subscriptionStartDate,
-        subscriptionEndDate: expiryIso,
-        notes: `Approved by ${adminIdentifier}. PRO unlocked until ${expiryIso}.`,
-      });
-
-      // Step 6: Update the user profile atomically linking this exact payment submission
-      // Stores native Firestore Timestamp in expiryDate for server-enforced rules
-      if (userSnap.exists()) {
-        transaction.update(userDocRef, {
-          subscriptionTier: 'pro',
-          subscriptionStatus: 'active',
-          paymentStatus: 'active_pro',
-          subscriptionStartDate,
-          expiryDate: expiryTimestamp,
-          billingAnchorDay,
-          lastPaymentId: submissionId,
-          approvedAt: approvalIso,
-          approvedBy: adminIdentifier,
-          updatedAt: approvalIso,
-        });
-      } else {
-        transaction.set(userDocRef, {
-          id: riderUserId,
-          uid: riderUserId,
-          email: currentSub.userEmail,
-          role: 'rider',
-          subscriptionTier: 'pro',
-          subscriptionStatus: 'active',
-          paymentStatus: 'active_pro',
-          subscriptionStartDate,
-          expiryDate: expiryTimestamp,
-          billingAnchorDay,
-          bikeCount: 0,
-          lastPaymentId: submissionId,
-          approvedAt: approvalIso,
-          approvedBy: adminIdentifier,
-          createdAt: approvalIso,
-          updatedAt: approvalIso,
-        });
-      }
-
-      return {
-        subscriptionStartDate,
-        expiryDate: expiryIso,
-        expiryTimestamp,
-        billingAnchorDay,
-      };
-    });
-
-    return result;
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message.includes('already been reviewed') || error.message.includes('not found'))
-    ) {
-      throw error;
-    }
-    handleFirestoreError(error, OperationType.UPDATE, `paymentSubmissions/${submissionId}`);
-    throw error;
-  }
-}
-
-// 7. Admin: Revoke Pro Access Atomically via runTransaction
-export async function revokeProAccessInFirestore(
-  submissionId: string | null,
-  riderUserId: string,
-  adminIdentifier: string = 'Owner Admin'
-): Promise<void> {
-  const userDocRef = doc(db, 'users', riderUserId);
-  const subDocRef = submissionId ? doc(db, 'paymentSubmissions', submissionId) : null;
-  const nowIso = new Date().toISOString();
-
-  try {
-    await runTransaction(db, async (transaction) => {
-      const userSnap = await transaction.get(userDocRef);
-      let subSnap = null;
-      if (subDocRef) {
-        subSnap = await transaction.get(subDocRef);
-      }
-
-      // If a pending submission is associated, mark it rejected
-      if (subDocRef && subSnap && subSnap.exists()) {
-        const subData = subSnap.data() as PaymentSubmission;
-        if (subData.status === 'pending_approval') {
-          transaction.update(subDocRef, {
-            status: 'rejected',
-            reviewedAt: nowIso,
-            reviewedBy: adminIdentifier,
-            notes: `Rejected / revoked by ${adminIdentifier}.`,
-          });
-        }
-      }
-
-      // Revert user to Free, revoke status, set expiryDate to current timestamp
-      if (userSnap.exists()) {
-        transaction.update(userDocRef, {
-          subscriptionTier: 'free',
-          subscriptionStatus: 'revoked',
-          paymentStatus: 'unpaid_free',
-          expiryDate: Timestamp.now(),
-          updatedAt: nowIso,
-        });
-      }
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `users/${riderUserId}`);
-    throw error;
-  }
-}
-
-// 8. Safe Migration Helper for Existing Records with String ExpiryDates
-export async function migrateUserExpiryToTimestamp(userId: string): Promise<boolean> {
-  const userDocRef = doc(db, 'users', userId);
-  try {
-    const snap = await getDoc(userDocRef);
-    if (!snap.exists()) return false;
-    const data = snap.data();
-    if (data.expiryDate && typeof data.expiryDate === 'string') {
-      const dateObj = new Date(data.expiryDate);
-      if (!isNaN(dateObj.getTime())) {
-        await updateDoc(userDocRef, {
-          expiryDate: Timestamp.fromDate(dateObj),
-          updatedAt: new Date().toISOString(),
-        });
-        return true;
-      }
-    }
-    return false;
-  } catch (error) {
-    console.error(`Failed to migrate user ${userId} expiryDate:`, error);
-    return false;
-  }
-}
-
-export interface CounterReconciliationItem {
-  userId: string;
-  userEmail: string;
-  userName: string;
-  storedBikeCount: number;
-  actualMotorcycleCount: number;
-  needsCorrection: boolean;
-}
-
-export interface CounterReconciliationReport {
-  totalUsersInspected: number;
-  totalMotorcyclesFound: number;
-  usersRequiringCorrection: number;
-  usersAlreadyMatching: number;
-  items: CounterReconciliationItem[];
-  executedAt: string;
-  isDryRun: boolean;
-}
-
-export interface TimestampMigrationItem {
-  userId: string;
-  userEmail: string;
-  userName: string;
-  subscriptionTier: string;
-  subscriptionStatus: string;
-  currentType: 'Timestamp' | 'ISO_String' | 'Epoch_Millis' | 'Missing';
-  rawExpiryValue: string;
-  parsedDateIso: string | null;
-  needsMigration: boolean;
-}
-
-export interface TimestampMigrationReport {
-  totalUsersInspected: number;
-  timestampCount: number;
-  isoStringCount: number;
-  epochMillisCount: number;
-  missingCount: number;
-  usersRequiringMigration: number;
-  items: TimestampMigrationItem[];
-  executedAt: string;
-  isDryRun: boolean;
-}
-
-/**
- * 9. Admin Counter Reconciliation Utilities:
- * Generates a non-destructive DRY RUN report inspecting every registered user
- * and comparing their stored `bikeCount` with their actual `/motorcycles` documents.
- */
-export async function generateCounterReconciliationDryRun(): Promise<CounterReconciliationReport> {
-  const usersSnap = await getDocs(collection(db, 'users'));
-  const motorcyclesSnap = await getDocs(collection(db, 'motorcycles'));
-
-  const bikesByUser = new Map<string, number>();
-  motorcyclesSnap.forEach((docSnap) => {
-    const data = docSnap.data();
-    const ownerId = data.userId;
-    if (ownerId) {
-      bikesByUser.set(ownerId, (bikesByUser.get(ownerId) || 0) + 1);
-    }
-  });
-
-  const items: CounterReconciliationItem[] = [];
-  let usersRequiringCorrection = 0;
-  let usersAlreadyMatching = 0;
-
-  usersSnap.forEach((docSnap) => {
-    const data = docSnap.data();
-    const userId = docSnap.id;
-    const storedCount = typeof data.bikeCount === 'number' ? data.bikeCount : 0;
-    const actualCount = bikesByUser.get(userId) || 0;
-    const needsCorrection = storedCount !== actualCount;
-
-    if (needsCorrection) {
-      usersRequiringCorrection++;
-    } else {
-      usersAlreadyMatching++;
-    }
-
-    items.push({
-      userId,
-      userEmail: data.email || 'No email',
-      userName: data.displayName || data.name || 'Rider',
-      storedBikeCount: storedCount,
-      actualMotorcycleCount: actualCount,
-      needsCorrection,
-    });
-  });
-
-  return {
-    totalUsersInspected: usersSnap.size,
-    totalMotorcyclesFound: motorcyclesSnap.size,
-    usersRequiringCorrection,
-    usersAlreadyMatching,
-    items,
-    executedAt: new Date().toISOString(),
-    isDryRun: true,
-  };
-}
-
-/**
- * Executes counter reconciliation safely in chunks of 50.
- * Requires explicit administrator confirmation.
- * Catches individual write failures to prevent orphaned updates.
- */
-export async function executeCounterReconciliation(
-  itemsToFix: CounterReconciliationItem[]
-): Promise<{
-  successCount: number;
-  failedCount: number;
-  errors: string[];
-}> {
-  let successCount = 0;
-  let failedCount = 0;
-  const errors: string[] = [];
-
-  const targets = itemsToFix.filter((item) => item.needsCorrection);
-  const CHUNK_SIZE = 50;
-
-  for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
-    const chunk = targets.slice(i, i + CHUNK_SIZE);
-    await Promise.all(
-      chunk.map(async (item) => {
-        try {
-          const userDocRef = doc(db, 'users', item.userId);
-          await updateDoc(userDocRef, {
-            bikeCount: item.actualMotorcycleCount,
-            updatedAt: new Date().toISOString(),
-          });
-          successCount++;
-        } catch (err: any) {
-          failedCount++;
-          errors.push(`User ${item.userId}: ${err?.message || 'Update failed'}`);
-        }
-      })
-    );
-  }
-
-  return { successCount, failedCount, errors };
-}
-
-/**
- * 10. Admin Timestamp Migration Utilities:
- * Generates an inspection report categorizing the exact storage format of expiryDate across all users.
- */
-export async function generateTimestampMigrationDryRun(): Promise<TimestampMigrationReport> {
-  const usersSnap = await getDocs(collection(db, 'users'));
-  const items: TimestampMigrationItem[] = [];
-
-  let timestampCount = 0;
-  let isoStringCount = 0;
-  let epochMillisCount = 0;
-  let missingCount = 0;
-  let usersRequiringMigration = 0;
-
-  usersSnap.forEach((docSnap) => {
-    const data = docSnap.data();
-    const rawVal = data.expiryDate;
-    let currentType: 'Timestamp' | 'ISO_String' | 'Epoch_Millis' | 'Missing' = 'Missing';
-    let rawString = 'None';
-    let parsedIso: string | null = null;
-
-    if (!rawVal) {
-      currentType = 'Missing';
-      missingCount++;
-    } else if (typeof (rawVal as any)?.toDate === 'function' || ('seconds' in rawVal && 'nanoseconds' in rawVal)) {
-      currentType = 'Timestamp';
-      timestampCount++;
-      rawString = `Timestamp(s=${rawVal.seconds})`;
-      parsedIso = (rawVal as any).toDate().toISOString();
-    } else if (typeof rawVal === 'string') {
-      currentType = 'ISO_String';
-      isoStringCount++;
-      rawString = rawVal;
-      const d = new Date(rawVal);
-      parsedIso = !isNaN(d.getTime()) ? d.toISOString() : null;
-    } else if (typeof rawVal === 'number') {
-      currentType = 'Epoch_Millis';
-      epochMillisCount++;
-      rawString = String(rawVal);
-      const d = new Date(rawVal);
-      parsedIso = !isNaN(d.getTime()) ? d.toISOString() : null;
-    }
-
-    const needsMigration = (currentType === 'ISO_String' || currentType === 'Epoch_Millis') && parsedIso !== null;
-    if (needsMigration) {
-      usersRequiringMigration++;
-    }
-
-    items.push({
-      userId: docSnap.id,
-      userEmail: data.email || 'No email',
-      userName: data.displayName || data.name || 'Rider',
-      subscriptionTier: data.subscriptionTier || 'free',
-      subscriptionStatus: data.subscriptionStatus || 'free',
-      currentType,
-      rawExpiryValue: rawString,
-      parsedDateIso: parsedIso,
-      needsMigration,
-    });
-  });
-
-  return {
-    totalUsersInspected: usersSnap.size,
-    timestampCount,
-    isoStringCount,
-    epochMillisCount,
-    missingCount,
-    usersRequiringMigration,
-    items,
-    executedAt: new Date().toISOString(),
-    isDryRun: true,
-  };
-}
-
-/**
- * Executes timestamp migration for identified legacy records.
- * Converts ISO strings / epoch millis to native Firestore Timestamp without changing dates or tiers.
- */
-export async function executeTimestampMigration(
-  itemsToMigrate: TimestampMigrationItem[]
-): Promise<{
-  successCount: number;
-  failedCount: number;
-  errors: string[];
-}> {
-  let successCount = 0;
-  let failedCount = 0;
-  const errors: string[] = [];
-
-  const targets = itemsToMigrate.filter((item) => item.needsMigration && item.parsedDateIso);
-  const CHUNK_SIZE = 50;
-
-  for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
-    const chunk = targets.slice(i, i + CHUNK_SIZE);
-    await Promise.all(
-      chunk.map(async (item) => {
-        try {
-          const userDocRef = doc(db, 'users', item.userId);
-          const dateObj = new Date(item.parsedDateIso!);
-          await updateDoc(userDocRef, {
-            expiryDate: Timestamp.fromDate(dateObj),
-            updatedAt: new Date().toISOString(),
-          });
-          successCount++;
-        } catch (err: any) {
-          failedCount++;
-          errors.push(`User ${item.userId}: ${err?.message || 'Migration failed'}`);
-        }
-      })
-    );
-  }
-
-  return { successCount, failedCount, errors };
-}
-
-/**
- * Single User Admin Counter Reconciliation Helper
- */
-export async function reconcileUserBikeCount(userId: string): Promise<number> {
-  const userDocRef = doc(db, 'users', userId);
-  const motorcyclesQuery = query(collection(db, 'motorcycles'), where('userId', '==', userId));
-
-  const motorcyclesSnap = await getDocs(motorcyclesQuery);
-  const actualCount = motorcyclesSnap.size;
-
-  await updateDoc(userDocRef, {
-    bikeCount: actualCount,
-    updatedAt: new Date().toISOString(),
-  });
-
-  return actualCount;
-}
-
-export async function reconcileAllUsersBikeCounts(): Promise<{ userId: string; actualCount: number }[]> {
-  const report = await generateCounterReconciliationDryRun();
-  const toFix = report.items.filter((item) => item.needsCorrection);
-  await executeCounterReconciliation(toFix);
-  return report.items.map((it) => ({ userId: it.userId, actualCount: it.actualMotorcycleCount }));
-}
-
-// 10. Server-Enforced Motorcycle Garage Persistence (Atomic Quota Enforcement)
-export function canCreateMotorcycleInGarage(params: {
-  authUser: { uid?: string; email?: string | null; emailVerified?: boolean } | null | undefined;
-  targetUserId: string;
-  userDocData: Record<string, unknown> | null | undefined;
-  currentCount: number;
-  nowMs?: number;
-}): boolean {
-  const { authUser, targetUserId, userDocData, currentCount, nowMs = Date.now() } = params;
-
-  const isVerifiedOwner =
-    Boolean(authUser) &&
-    authUser?.uid === targetUserId &&
-    authUser?.email?.toLowerCase() === 'mustetm7@gmail.com' &&
-    authUser?.emailVerified === true;
-
-  const isActivePaidPro =
-    Boolean(userDocData) &&
-    userDocData?.subscriptionTier === 'pro' &&
-    userDocData?.subscriptionStatus !== 'revoked' &&
-    userDocData?.subscriptionStatus !== 'expired' &&
-    userDocData?.subscriptionStatus !== 'free' &&
-    (() => {
-      const exp = parseExpiryToDate(userDocData?.expiryDate);
-      return exp !== null && exp.getTime() > nowMs;
-    })();
-
-  const hasProAccess = isVerifiedOwner || isActivePaidPro;
-  return hasProAccess || currentCount < 1;
-}
-
-export function normalizeFirestoreTimestampToIso(val: unknown): string | undefined {
-  if (!val) return undefined;
-  if (typeof (val as any)?.toDate === 'function') {
-    return (val as any).toDate().toISOString();
-  }
-  if (typeof val === 'object' && val !== null && 'seconds' in val && typeof (val as any).seconds === 'number') {
-    const nanos = typeof (val as any).nanoseconds === 'number' ? (val as any).nanoseconds : 0;
-    return new Date((val as any).seconds * 1000 + Math.floor(nanos / 1_000_000)).toISOString();
-  }
-  if (typeof val === 'string') {
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? undefined : d.toISOString();
-  }
-  if (typeof val === 'number') {
-    return new Date(val).toISOString();
-  }
-  return undefined;
-}
-
-export function sanitizeFirestorePayload<T extends Record<string, any>>(obj: T): Record<string, any> {
-  const result: Record<string, any> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === undefined) continue;
-    if (key === 'timestampSource') continue;
-    if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Timestamp) && typeof (value as any)?.toDate !== 'function') {
-      result[key] = sanitizeFirestorePayload(value);
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
-let lastIssuedFirestoreTimestampMs = 0;
-
-/**
- * Generates a strictly monotonic Firestore Timestamp so rapid consecutive writes
- * (including multi-device unit tests within the same millisecond) always produce
- * distinct, comparable `updatedAt` versions.
- */
-export function nextMonotonicTimestamp(): Timestamp {
-  const nowMs = Date.now();
-  const nextMs = nowMs > lastIssuedFirestoreTimestampMs ? nowMs : lastIssuedFirestoreTimestampMs + 1;
-  lastIssuedFirestoreTimestampMs = nextMs;
-  if (typeof (Timestamp as any)?.fromDate === 'function') {
-    return Timestamp.fromDate(new Date(nextMs));
-  }
-  return Timestamp.now();
-}
-
-export interface WriteConcurrencyOptions {
-  /**
-   * When true, enforces strict optimistic concurrency control inside the Firestore transaction.
-   */
-  enforceVersionCheck?: boolean;
-  /**
-   * The authoritative cloud `updatedAt` ISO timestamp that the mutation was based upon.
-   */
-  baseCloudUpdatedAt?: string | null;
-  /**
-   * The authoritative integer revision (`cloudVersion`) that the mutation was based upon.
-   */
-  baseCloudVersion?: number | null;
-  /**
-   * True when the mutation was created for a new document expected not to exist in Firestore.
-   */
-  expectedCloudAbsent?: boolean;
-  /**
-   * True when a legacy queued item lacks a trustworthy base cloud version.
-   */
-  baseVersionUntrusted?: boolean;
-}
-
-export interface ConcurrencyConflictDetails {
-  entity: OfflineMutationEntity;
-  targetId: string;
-  action: OfflineMutationAction;
-  baseCloudUpdatedAt: string | null;
-  currentCloudUpdatedAt: string | null;
-  baseCloudVersion?: number | null;
-  currentCloudVersion?: number | null;
-  reason: string;
-}
 
 export const SAFE_BATCH_TRANSACTION_CHUNK_SIZE = 8;
 export const SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE = 50;
 
 /**
- * Computes the next integer `cloudVersion` for an existing Firestore document:
- * - If `existingData` has no `cloudVersion` field (`!('cloudVersion' in existingData)` or `existingData.cloudVersion === undefined`):
- *   returns `1` (legacy document without `cloudVersion` safely receives version `1` on its first update).
- * - If `existingData.cloudVersion` is a valid positive integer (`Number.isInteger(v) && v >= 1`):
- *   returns `existingData.cloudVersion + 1`.
- * - If `existingData.cloudVersion` is present but malformed (`null`, string, float, `NaN`, `<= 0`):
- *   throws a `PERMISSION_DENIED` error to fail safely rather than silently inventing a revision.
+ * Strips keys whose values are `undefined` so Firestore never rejects a document write.
  */
-export function resolveNextCloudVersionForUpdate(
-  existingData: Record<string, any> | undefined | null,
-  entity: OfflineMutationEntity,
-  targetId: string
-): number {
-  if (!existingData || !('cloudVersion' in existingData) || existingData.cloudVersion === undefined) {
-    return 1;
+function stripUndefined<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = value;
+    }
   }
-  const raw = existingData.cloudVersion;
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
-    throw new Error(
-      `PERMISSION_DENIED: Malformed cloudVersion (${String(raw)}) on existing ${entity} (${targetId}). Refusing to invent revision.`
-    );
-  }
-  return raw + 1;
-}
-
-export function createConcurrencyConflictError(details: ConcurrencyConflictDetails): Error {
-  const err = new Error(
-    `CONCURRENCY_CONFLICT: ${details.reason} [base=${details.baseCloudUpdatedAt ?? 'none'}(v=${details.baseCloudVersion ?? 'none'}), cloud=${details.currentCloudUpdatedAt ?? 'none'}(v=${details.currentCloudVersion ?? 'none'})]`
-  );
-  (err as any).conflictDetails = details;
-  return err;
+  return cleaned;
 }
 
 /**
- * Validates inside an active Firestore transaction that the cloud document's current
- * `updatedAt` (strict ISO `&&` epoch-millisecond equality) and transactional integer
- * `cloudVersion` match the mutation's base version.
- * Throws a `CONCURRENCY_CONFLICT` Error to abort the transaction if the cloud document
- * was modified by another device or if the item lacks a trustworthy base version.
+ * Normalizes a Firestore Timestamp, { seconds, nanoseconds }, Date, or ISO string
+ * into an ISO-8601 string with millisecond precision preserved.
  */
-export function assertTransactionVersionMatches(params: {
-  entity: OfflineMutationEntity;
-  targetId: string;
-  action: OfflineMutationAction;
-  existingData: Record<string, any>;
-  concurrency: WriteConcurrencyOptions;
-}): void {
-  const { entity, targetId, action, existingData, concurrency } = params;
-  const cloudUpdatedIso =
-    normalizeFirestoreTimestampToIso(existingData?.updatedAt) ||
-    normalizeFirestoreTimestampToIso(existingData?.createdAt) ||
-    null;
-  const cloudUpdatedMs =
-    parseTimestampToMillis(existingData?.updatedAt) ??
-    parseTimestampToMillis(existingData?.createdAt);
+export function normalizeFirestoreTimestampToIso(val: unknown): string | undefined {
+  const ms = parseTimestampToMillis(val);
+  if (ms !== null && Number.isFinite(ms)) {
+    return new Date(ms).toISOString();
+  }
+  if (typeof val === 'string' && val.trim().length > 0) {
+    return val;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the next monotonic `cloudVersion` integer for an update operation.
+ * - Legacy documents without `cloudVersion` receive `cloudVersion = 1` on their first update.
+ * - Valid existing positive integer `cloudVersion` increments by +1 (`cloudVersion + 1`).
+ * - Malformed `cloudVersion` values fail safely with `PERMISSION_DENIED: Malformed cloudVersion`.
+ */
+export function resolveNextCloudVersionForUpdate(
+  existingData: Record<string, any> | undefined | null,
+  entity: string = 'document',
+  targetId: string = ''
+): number {
   if (
-    existingData &&
-    'cloudVersion' in existingData &&
-    existingData.cloudVersion !== undefined &&
-    (typeof existingData.cloudVersion !== 'number' ||
-      !Number.isInteger(existingData.cloudVersion) ||
-      existingData.cloudVersion < 1)
+    !existingData ||
+    !('cloudVersion' in existingData) ||
+    existingData.cloudVersion === undefined ||
+    existingData.cloudVersion === null
   ) {
+    return 1;
+  }
+  const current = existingData.cloudVersion;
+  if (typeof current !== 'number' || !Number.isInteger(current) || current < 1) {
     throw new Error(
-      `PERMISSION_DENIED: Malformed cloudVersion (${String(existingData.cloudVersion)}) on existing ${entity} (${targetId}).`
+      `PERMISSION_DENIED: Malformed cloudVersion on ${entity} (${targetId}): ${String(current)}`
     );
   }
+  return current + 1;
+}
+
+export interface ConcurrencyCheckOptions {
+  enforceVersionCheck?: boolean;
+  baseCloudUpdatedAt?: string | null;
+  baseCloudVersion?: number | null;
+  expectedCloudAbsent?: boolean;
+  baseVersionUntrusted?: boolean;
+}
+
+function verifyTransactionConcurrency(params: {
+  entity: 'motorcycle' | 'reminder' | 'serviceRecord';
+  targetId: string;
+  snapExists: boolean;
+  cloudData: Record<string, any> | undefined;
+  opts?: ConcurrencyCheckOptions;
+}): void {
+  const { entity, targetId, snapExists, cloudData, opts } = params;
+  if (!opts || !opts.enforceVersionCheck) return;
+
+  const cloudUpdatedAtIso = snapExists
+    ? normalizeFirestoreTimestampToIso(cloudData?.updatedAt) || null
+    : null;
   const cloudVersion =
-    typeof existingData?.cloudVersion === 'number' &&
-    Number.isInteger(existingData.cloudVersion) &&
-    existingData.cloudVersion >= 1
-      ? existingData.cloudVersion
-      : null;
+    snapExists && typeof cloudData?.cloudVersion === 'number' ? cloudData.cloudVersion : null;
 
-  // 1. Mutation expected document NOT to exist in Firestore, yet it already exists
-  if (
-    concurrency.expectedCloudAbsent === true &&
-    !concurrency.baseCloudUpdatedAt &&
-    concurrency.baseCloudVersion == null
-  ) {
-    throw createConcurrencyConflictError({
-      entity,
-      targetId,
-      action,
-      baseCloudUpdatedAt: null,
-      currentCloudUpdatedAt: cloudUpdatedIso,
-      baseCloudVersion: null,
-      currentCloudVersion: cloudVersion,
-      reason: `Target ${entity} (${targetId}) was expected to be a newly created document, but already exists in Firestore (version ${cloudUpdatedIso || 'unknown'}).`,
-    });
+  if (opts.baseVersionUntrusted) {
+    const err: any = new Error(
+      `CONCURRENCY_CONFLICT: Untrusted or missing base cloud version for ${entity} (${targetId}); refusing to overwrite existing cloud state.`
+    );
+    err.conflictCloudUpdatedAt = cloudUpdatedAtIso;
+    err.conflictCloudVersion = cloudVersion;
+    err.conflictReason = `Missing trustworthy base cloud version for ${entity} (${targetId}).`;
+    throw err;
   }
 
-  // 2. Legacy or untrusted queue item lacking a trustworthy base version
-  if (
-    concurrency.baseVersionUntrusted ||
-    (!concurrency.baseCloudUpdatedAt && typeof concurrency.baseCloudVersion !== 'number')
-  ) {
-    throw createConcurrencyConflictError({
-      entity,
-      targetId,
-      action,
-      baseCloudUpdatedAt: null,
-      currentCloudUpdatedAt: cloudUpdatedIso,
-      baseCloudVersion: concurrency.baseCloudVersion ?? null,
-      currentCloudVersion: cloudVersion,
-      reason: `Queued ${action} on ${entity} (${targetId}) lacks a trustworthy baseCloudUpdatedAt while the cloud document exists (version ${cloudUpdatedIso || 'unknown'}). Conflict review required.`,
-    });
-  }
-
-  // 3. Compare transactional integer cloudVersion revision when present (clock-skew independent)
-  if (typeof concurrency.baseCloudVersion === 'number' && cloudVersion !== null) {
-    if (cloudVersion !== concurrency.baseCloudVersion) {
-      throw createConcurrencyConflictError({
-        entity,
-        targetId,
-        action,
-        baseCloudUpdatedAt: concurrency.baseCloudUpdatedAt ?? null,
-        currentCloudUpdatedAt: cloudUpdatedIso,
-        baseCloudVersion: concurrency.baseCloudVersion,
-        currentCloudVersion: cloudVersion,
-        reason: `Cloud ${entity} (${targetId}) was modified by another device (cloud revision v${cloudVersion} !== mutation base revision v${concurrency.baseCloudVersion}, cloud timestamp: ${cloudUpdatedIso || 'unknown'}).`,
-      });
+  if (opts.expectedCloudAbsent === true) {
+    if (snapExists) {
+      const err: any = new Error(
+        `CONCURRENCY_CONFLICT: Expected ${entity} (${targetId}) to be absent in cloud, but it was already created by another device.`
+      );
+      err.conflictCloudUpdatedAt = cloudUpdatedAtIso;
+      err.conflictCloudVersion = cloudVersion;
+      err.conflictReason = `Document ${entity}/${targetId} was created concurrently by another device.`;
+      throw err;
     }
-  }
-
-  // 4. Compare current cloud timestamp against baseCloudUpdatedAt using strict && equality
-  if (concurrency.baseCloudUpdatedAt) {
-    const baseIso = concurrency.baseCloudUpdatedAt;
-    const baseMs = parseTimestampToMillis(baseIso);
-
-    const exactIsoMatch = cloudUpdatedIso !== null && cloudUpdatedIso === baseIso;
-    const exactMillisMatch =
-      cloudUpdatedMs !== null && baseMs !== null && cloudUpdatedMs === baseMs;
-
-    if (!exactIsoMatch || !exactMillisMatch) {
-      throw createConcurrencyConflictError({
-        entity,
-        targetId,
-        action,
-        baseCloudUpdatedAt: baseIso,
-        currentCloudUpdatedAt: cloudUpdatedIso,
-        baseCloudVersion: concurrency.baseCloudVersion ?? null,
-        currentCloudVersion: cloudVersion,
-        reason: `Cloud ${entity} (${targetId}) was modified by another device (cloud version: ${cloudUpdatedIso || 'unknown'}, mutation base version: ${baseIso}).`,
-      });
-    }
-  }
-}
-
-export function normalizeMotorcycleFromFirestore(
-  raw: Record<string, any>,
-  hasPendingWrites: boolean = false
-): Motorcycle {
-  const createdIso = normalizeFirestoreTimestampToIso(raw.createdAt);
-  const updatedIso = normalizeFirestoreTimestampToIso(raw.updatedAt);
-  const cloudVersion =
-    typeof raw.cloudVersion === 'number' &&
-    Number.isInteger(raw.cloudVersion) &&
-    raw.cloudVersion >= 1
-      ? raw.cloudVersion
-      : undefined;
-  if (!hasPendingWrites && raw.userId && raw.id && (updatedIso || createdIso)) {
-    recordKnownCloudVersion(raw.userId, 'motorcycle', raw.id, updatedIso || createdIso, cloudVersion);
-  }
-  return {
-    ...(raw as Motorcycle),
-    createdAt: createdIso,
-    updatedAt: updatedIso,
-    ...(cloudVersion !== undefined ? { cloudVersion } : {}),
-    timestampSource: hasPendingWrites ? 'client_pending' : 'server',
-  };
-}
-
-export function normalizeReminderFromFirestore(
-  raw: Record<string, any>,
-  hasPendingWrites: boolean = false
-): MaintenanceReminder {
-  const createdIso = normalizeFirestoreTimestampToIso(raw.createdAt);
-  const updatedIso = normalizeFirestoreTimestampToIso(raw.updatedAt);
-  const cloudVersion =
-    typeof raw.cloudVersion === 'number' &&
-    Number.isInteger(raw.cloudVersion) &&
-    raw.cloudVersion >= 1
-      ? raw.cloudVersion
-      : undefined;
-  if (!hasPendingWrites && raw.userId && raw.id && (updatedIso || createdIso)) {
-    recordKnownCloudVersion(raw.userId, 'reminder', raw.id, updatedIso || createdIso, cloudVersion);
-  }
-  return {
-    ...(raw as MaintenanceReminder),
-    createdAt: createdIso,
-    updatedAt: updatedIso,
-    ...(cloudVersion !== undefined ? { cloudVersion } : {}),
-    timestampSource: hasPendingWrites ? 'client_pending' : 'server',
-  };
-}
-
-export function normalizeServiceRecordFromFirestore(
-  raw: Record<string, any>,
-  hasPendingWrites: boolean = false
-): ServiceRecord {
-  const createdIso = normalizeFirestoreTimestampToIso(raw.createdAt);
-  const updatedIso = normalizeFirestoreTimestampToIso(raw.updatedAt);
-  const cloudVersion =
-    typeof raw.cloudVersion === 'number' &&
-    Number.isInteger(raw.cloudVersion) &&
-    raw.cloudVersion >= 1
-      ? raw.cloudVersion
-      : undefined;
-  if (!hasPendingWrites && raw.userId && raw.id && (updatedIso || createdIso)) {
-    recordKnownCloudVersion(raw.userId, 'serviceRecord', raw.id, updatedIso || createdIso, cloudVersion);
-  }
-  return {
-    ...(raw as ServiceRecord),
-    createdAt: createdIso,
-    updatedAt: updatedIso,
-    ...(cloudVersion !== undefined ? { cloudVersion } : {}),
-    timestampSource: hasPendingWrites ? 'client_pending' : 'server',
-  };
-}
-
-export async function saveMotorcycleToFirestore(
-  bike: Motorcycle,
-  userId: string,
-  concurrency?: WriteConcurrencyOptions
-): Promise<void> {
-  if (!userId) {
-    throw new Error('AUTH_REQUIRED: You must be signed in to save a motorcycle to cloud storage.');
-  }
-  if (CONFIRMED_SAMPLE_MOTORCYCLE_IDS.has(bike.id)) {
     return;
   }
 
-  const bikeDocRef = doc(db, 'motorcycles', bike.id);
-  const userDocRef = doc(db, 'users', userId);
-  const cleanPayload = sanitizeFirestorePayload(bike);
-  let committedIso: string | null = null;
-  let committedVersion = 1;
+  const hasBaseVersionNum =
+    typeof opts.baseCloudVersion === 'number' && Number.isFinite(opts.baseCloudVersion);
+  const hasBaseUpdatedAtStr =
+    typeof opts.baseCloudUpdatedAt === 'string' && opts.baseCloudUpdatedAt.length > 0;
 
+  if (!hasBaseVersionNum && !hasBaseUpdatedAtStr) {
+    if (snapExists) {
+      const err: any = new Error(
+        `CONCURRENCY_CONFLICT: Missing base cloud version for existing ${entity} (${targetId}).`
+      );
+      err.conflictCloudUpdatedAt = cloudUpdatedAtIso;
+      err.conflictCloudVersion = cloudVersion;
+      err.conflictReason = `Missing base cloud version for existing ${entity}/${targetId}.`;
+      throw err;
+    }
+    return;
+  }
+
+  if (!snapExists) {
+    const err: any = new Error(
+      `CONCURRENCY_CONFLICT: ${entity} (${targetId}) was deleted on another device.`
+    );
+    err.conflictCloudUpdatedAt = null;
+    err.conflictCloudVersion = null;
+    err.conflictReason = `Document ${entity}/${targetId} was modified or removed by another device.`;
+    throw err;
+  }
+
+  if (hasBaseVersionNum && cloudVersion !== null && opts.baseCloudVersion !== cloudVersion) {
+    const err: any = new Error(
+      `CONCURRENCY_CONFLICT: ${entity} (${targetId}) was modified by another device (base v${opts.baseCloudVersion} vs cloud v${cloudVersion}).`
+    );
+    err.conflictCloudUpdatedAt = cloudUpdatedAtIso;
+    err.conflictCloudVersion = cloudVersion;
+    err.conflictReason = `${entity} (${targetId}) was modified by another device (base v${opts.baseCloudVersion} vs cloud v${cloudVersion}).`;
+    throw err;
+  }
+
+  if (
+    hasBaseUpdatedAtStr &&
+    cloudUpdatedAtIso !== null &&
+    opts.baseCloudUpdatedAt !== cloudUpdatedAtIso
+  ) {
+    const err: any = new Error(
+      `CONCURRENCY_CONFLICT: ${entity} (${targetId}) was modified by another device (base ${opts.baseCloudUpdatedAt} vs cloud ${cloudUpdatedAtIso}).`
+    );
+    err.conflictCloudUpdatedAt = cloudUpdatedAtIso;
+    err.conflictCloudVersion = cloudVersion;
+    err.conflictReason = `${entity} (${targetId}) was modified by another device (base ${opts.baseCloudUpdatedAt} vs cloud ${cloudUpdatedAtIso}).`;
+    throw err;
+  }
+}
+
+/**
+ * Normalizes a payment reference number (uppercase, trimmed, spaces/hyphens removed)
+ */
+export function normalizeReferenceNumber(ref: string): string {
+  return ref.trim().toUpperCase().replace(/[\s-]+/g, '');
+}
+
+/**
+ * Validates a real GCash/payment reference number:
+ * - Trimmed
+ * - 8 to 64 characters after normalization
+ * - Letters and digits only after normalization
+ * - Rejects auto-generated placeholder prefixes (MC-GCASH-)
+ */
+export function validatePaymentReferenceNumber(rawRef: string): {
+  valid: boolean;
+  normalized: string;
+  trimmed: string;
+  error?: string;
+} {
+  const trimmed = (rawRef || '').trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      normalized: '',
+      trimmed: '',
+      error: 'Please enter your official GCash reference number (8–64 letters or digits).',
+    };
+  }
+  if (/^MC-GCASH-/i.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: '',
+      trimmed,
+      error: 'Please enter the real GCash reference number from your receipt, not a placeholder code.',
+    };
+  }
+  if (!/^[A-Za-z0-9\s-]+$/.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: '',
+      trimmed,
+      error: 'Reference number may only contain letters and digits (8–64 characters).',
+    };
+  }
+  const normalized = normalizeReferenceNumber(trimmed);
+  if (normalized.length < 8 || normalized.length > 64 || !/^[A-Z0-9]{8,64}$/.test(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      trimmed,
+      error: 'Reference number must be 8 to 64 letters and digits.',
+    };
+  }
+  return { valid: true, normalized, trimmed };
+}
+
+/**
+ * Computes a deterministic SHA-256 hex digest of a normalized reference number
+ * for the `/paymentReferences/{refHash}` uniqueness index.
+ */
+export async function computeReferenceHash(rawRef: string): Promise<string> {
+  const normalized = normalizeReferenceNumber(rawRef);
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const msgBuffer = new TextEncoder().encode(normalized);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash * 33) ^ normalized.charCodeAt(i);
+  }
+  return `ref_${(hash >>> 0).toString(16)}_${normalized}`;
+}
+
+/**
+ * Helper: Safely converts a Firestore Timestamp, Date, or ISO string into a JavaScript Date
+ */
+export function parseExpiryToDate(val: any): Date | null {
+  if (!val) return null;
+  if (val instanceof Timestamp) {
+    return val.toDate();
+  }
+  if (typeof val?.toDate === 'function') {
+    return val.toDate();
+  }
+  if (typeof val?.toMillis === 'function') {
+    return new Date(val.toMillis());
+  }
+  if (typeof val?.seconds === 'number') {
+    return new Date(val.seconds * 1000);
+  }
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? null : val;
+  }
+  if (typeof val === 'string' || typeof val === 'number') {
+    const parsed = new Date(val);
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Date Math Helper: Computes the next monthly expiry date in Asia/Manila (UTC+8)
+ * preserving the billing anchor day where possible (clamping to month end e.g. Jan 31 -> Feb 28).
+ */
+export function calculateNextMonthlyExpiry(
+  baseDate: Date,
+  billingAnchorDay?: number
+): { expiryIso: string; expiryTimestamp: Timestamp; anchorDay: number } {
+  const manilaOffsetMs = 8 * 60 * 60 * 1000;
+  const manilaTime = new Date(baseDate.getTime() + manilaOffsetMs);
+
+  const year = manilaTime.getUTCFullYear();
+  const month = manilaTime.getUTCMonth();
+  const currentDay = manilaTime.getUTCDate();
+  const hours = manilaTime.getUTCHours();
+  const minutes = manilaTime.getUTCMinutes();
+  const seconds = manilaTime.getUTCSeconds();
+  const ms = manilaTime.getUTCMilliseconds();
+
+  const anchorDay =
+    billingAnchorDay && billingAnchorDay >= 1 && billingAnchorDay <= 31
+      ? billingAnchorDay
+      : currentDay;
+
+  const targetMonthTotal = month + 1;
+  const targetYear = year + Math.floor(targetMonthTotal / 12);
+  const targetMonth = targetMonthTotal % 12;
+
+  const maxDaysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const clampedDay = Math.min(anchorDay, maxDaysInTargetMonth);
+
+  const nextManilaUtcMs = Date.UTC(
+    targetYear,
+    targetMonth,
+    clampedDay,
+    hours,
+    minutes,
+    seconds,
+    ms
+  );
+  const expiryDateObj = new Date(nextManilaUtcMs - manilaOffsetMs);
+
+  return {
+    expiryIso: expiryDateObj.toISOString(),
+    expiryTimestamp: Timestamp.fromDate(expiryDateObj),
+    anchorDay,
+  };
+}
+
+/**
+ * Extracts the day of the month (1-31) in Asia/Manila (UTC+8) for a given Date.
+ */
+export function getManilaDay(date: Date): number {
+  const manilaOffsetMs = 8 * 60 * 60 * 1000;
+  const manilaTime = new Date(date.getTime() + manilaOffsetMs);
+  return manilaTime.getUTCDate();
+}
+
+/**
+ * Calculates remaining whole days from now until expiryDate
+ */
+export function calculateDaysRemaining(expiryVal: any, now: Date = new Date()): number {
+  const expiry = parseExpiryToDate(expiryVal);
+  if (!expiry) return 0;
+  const diffMs = expiry.getTime() - now.getTime();
+  if (diffMs <= 0) return 0;
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Syncs or creates the User Profile in Firestore upon sign-in.
+ * Read-cost & write-cost optimization: when the profile already exists, only writes
+ * (`updateDoc`) if `displayName` or `photoURL` actually changed.
+ */
+export async function syncUserProfile(user: User): Promise<void> {
+  const path = `users/${user.uid}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const bikeSnap = await transaction.get(bikeDocRef);
-      const userSnap = await transaction.get(userDocRef);
-      const nowTs = nextMonotonicTimestamp();
-      const nowIso = nowTs.toDate().toISOString();
-      committedIso = nowIso;
+    const userRef = doc(db, 'users', user.uid);
+    const existing = await getDoc(userRef);
 
-      if (bikeSnap.exists()) {
-        const existingData = bikeSnap.data() || {};
-        if (existingData.userId && existingData.userId !== userId) {
-          throw new Error('PERMISSION_DENIED: Cannot modify a motorcycle owned by another user.');
-        }
-        if (concurrency?.enforceVersionCheck) {
-          assertTransactionVersionMatches({
-            entity: 'motorcycle',
-            targetId: bike.id,
-            action: 'upsert',
-            existingData,
-            concurrency,
-          });
-        }
-        committedVersion = resolveNextCloudVersionForUpdate(existingData, 'motorcycle', bike.id);
-        // Updating existing motorcycle does NOT consume additional quota
-        transaction.update(bikeDocRef, {
-          ...cleanPayload,
-          id: bike.id,
-          userId,
-          updatedAt: nowTs,
-          cloudVersion: committedVersion,
+    if (!existing.exists()) {
+      await setDoc(userRef, {
+        id: user.uid,
+        uid: user.uid,
+        email: (user.email || '').toLowerCase(),
+        displayName: user.displayName || 'MotoCare Rider',
+        photoURL: user.photoURL || '',
+        role: 'rider',
+        subscriptionTier: 'free',
+        subscriptionStatus: 'free',
+        paymentStatus: 'unpaid_free',
+        bikeCount: 0,
+        pendingSubmissionId: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp(),
+      });
+    } else {
+      const existingData = existing.data() || {};
+      const nextDisplayName = user.displayName || existingData.displayName || 'MotoCare Rider';
+      const nextPhotoURL = user.photoURL || existingData.photoURL || '';
+      const displayNameChanged = existingData.displayName !== nextDisplayName;
+      const photoUrlChanged = (existingData.photoURL || '') !== nextPhotoURL;
+
+      if (displayNameChanged || photoUrlChanged) {
+        await updateDoc(userRef, {
+          displayName: nextDisplayName,
+          photoURL: nextPhotoURL,
+          updatedAt: serverTimestamp(),
         });
-      } else {
-        if (concurrency?.enforceVersionCheck && concurrency.baseVersionUntrusted) {
-          throw createConcurrencyConflictError({
-            entity: 'motorcycle',
-            targetId: bike.id,
-            action: 'upsert',
-            baseCloudUpdatedAt: null,
-            currentCloudUpdatedAt: null,
-            baseCloudVersion: null,
-            currentCloudVersion: null,
-            reason: `Legacy queued motorcycle mutation (${bike.id}) is missing a trustworthy base version. Conflict review required.`,
-          });
-        }
-        // Creating NEW motorcycle: Verify quota before writing
-        const userDocData = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Determines whether a user is allowed to create an additional motorcycle in Firestore.
+ */
+export function canCreateMotorcycleInGarage(params: {
+  authUser: { uid?: string; email?: string | null; emailVerified?: boolean } | null | undefined;
+  targetUserId: string;
+  userDocData?: Record<string, any> | null;
+  currentCount: number;
+  nowMs?: number;
+}): boolean {
+  const { authUser, targetUserId, userDocData, currentCount, nowMs = Date.now() } = params;
+
+  const isVerifiedOwnerAdmin =
+    Boolean(authUser) &&
+    authUser?.email?.toLowerCase() === OWNER_ADMIN_EMAIL &&
+    authUser?.emailVerified === true &&
+    authUser?.uid === targetUserId;
+
+  if (isVerifiedOwnerAdmin) {
+    return true;
+  }
+
+  const tier = userDocData?.subscriptionTier;
+  const status = userDocData?.subscriptionStatus;
+  const expiryDateObj = parseExpiryToDate(userDocData?.expiryDate);
+  const isActivePaidPro =
+    tier === 'pro' &&
+    status !== 'revoked' &&
+    expiryDateObj !== null &&
+    expiryDateObj.getTime() > nowMs;
+
+  if (isActivePaidPro) {
+    return true;
+  }
+
+  return currentCount < 1;
+}
+
+function obtainMonotonicServerTimestamp(previousUpdatedAt?: any): { tsValue: any; tsIso: string } {
+  const raw = serverTimestamp();
+  const prevMs = parseTimestampToMillis(previousUpdatedAt) ?? 0;
+  const rawMs = parseTimestampToMillis(raw) ?? 0;
+  if (rawMs > 0 && prevMs > 0 && rawMs <= prevMs && typeof Timestamp?.fromDate === 'function') {
+    const bumpedDate = new Date(prevMs + 1);
+    const bumpedTs = Timestamp.fromDate(bumpedDate);
+    return { tsValue: bumpedTs, tsIso: bumpedDate.toISOString() };
+  }
+  const iso =
+    normalizeFirestoreTimestampToIso(raw) ||
+    new Date(prevMs > 0 ? Math.max(Date.now(), prevMs + 1) : Date.now()).toISOString();
+  return { tsValue: raw, tsIso: iso };
+}
+
+/**
+ * Saves or updates a Motorcycle document in Firestore.
+ * Uses a Firestore Transaction when creating or updating a motorcycle to atomically enforce
+ * `bikeCount`, ownership, and `cloudVersion` concurrency.
+ */
+export async function saveMotorcycleToFirestore(
+  bike: Motorcycle,
+  userId: string,
+  concurrencyOpts?: ConcurrencyCheckOptions
+): Promise<Motorcycle> {
+  const path = `motorcycles/${bike.id}`;
+  try {
+    const bikeRef = doc(db, 'motorcycles', bike.id);
+    const userRef = doc(db, 'users', userId);
+    const currentAuthUser = auth.currentUser;
+
+    const result = await runTransaction(db, async (transaction) => {
+      const bikeSnap = await transaction.get(bikeRef);
+      const userSnap = await transaction.get(userRef);
+
+      verifyTransactionConcurrency({
+        entity: 'motorcycle',
+        targetId: bike.id,
+        snapExists: bikeSnap.exists(),
+        cloudData: bikeSnap.data(),
+        opts: concurrencyOpts,
+      });
+
+      if (!bikeSnap.exists()) {
+        const { tsValue: tsNow, tsIso } = obtainMonotonicServerTimestamp();
+        const userData = userSnap.exists() ? userSnap.data() : null;
         const currentCount =
-          userSnap.exists() && typeof userSnap.data()?.bikeCount === 'number'
-            ? userSnap.data().bikeCount
-            : 0;
+          userData && typeof userData.bikeCount === 'number' ? userData.bikeCount : 0;
 
-        const allowed = canCreateMotorcycleInGarage({
-          authUser: auth.currentUser || { uid: userId },
+        const isAllowedToCreate = canCreateMotorcycleInGarage({
+          authUser: currentAuthUser,
           targetUserId: userId,
-          userDocData,
+          userDocData: userData,
           currentCount,
+          nowMs: Date.now(),
         });
 
-        if (!allowed) {
-          throw new Error('QUOTA_EXCEEDED: Free plan is limited to 1 motorcycle. Upgrade to Pro for unlimited garage bikes.');
+        if (!isAllowedToCreate) {
+          throw new Error(
+            'QUOTA_EXCEEDED: Free Plan Limit Reached: Only 1 motorcycle is allowed on the Free tier. Upgrade to MotoCare Pro for unlimited motorcycles.'
+          );
         }
 
-        committedVersion = 1;
-        transaction.set(bikeDocRef, {
-          ...cleanPayload,
-          id: bike.id,
+        const version = 1;
+        const payload = stripUndefined({
+          ...bike,
           userId,
-          createdAt: nowTs,
-          updatedAt: nowTs,
-          cloudVersion: committedVersion,
+          cloudVersion: version,
+          createdAt: tsNow,
+          updatedAt: tsNow,
+          timestampSource: 'server',
         });
+        if (typeof payload.photoUrl === 'string' && payload.photoUrl.length > 2000) {
+          payload.photoUrl = payload.photoUrl.slice(0, 2000);
+        }
+
+        transaction.set(bikeRef, payload);
 
         if (userSnap.exists()) {
-          transaction.update(userDocRef, {
+          transaction.update(userRef, {
             bikeCount: currentCount + 1,
             lastBikeId: bike.id,
             lastBikeAction: 'create',
-            updatedAt: nowIso,
+            updatedAt: tsNow,
           });
         }
+        return { version, tsIso };
+      } else {
+        const existingData = bikeSnap.data() || {};
+        if (existingData.userId && existingData.userId !== userId) {
+          throw new Error(
+            `PERMISSION_DENIED: Cannot modify motorcycle (${bike.id}) owned by another user.`
+          );
+        }
+        const version = resolveNextCloudVersionForUpdate(existingData, 'motorcycle', bike.id);
+        const { tsValue: tsNow, tsIso } = obtainMonotonicServerTimestamp(existingData.updatedAt);
+
+        const payload = stripUndefined({
+          ...bike,
+          userId,
+          cloudVersion: version,
+          updatedAt: tsNow,
+          timestampSource: 'server',
+        });
+        if (typeof payload.photoUrl === 'string' && payload.photoUrl.length > 2000) {
+          payload.photoUrl = payload.photoUrl.slice(0, 2000);
+        }
+        transaction.set(bikeRef, payload, { merge: true });
+        return { version, tsIso };
       }
     });
-    if (committedIso) {
-      recordKnownCloudVersion(userId, 'motorcycle', bike.id, committedIso, committedVersion);
-    }
+
+    recordKnownCloudVersion(userId, 'motorcycle', bike.id, result.tsIso, result.version);
     recordCloudSyncOperation({
       userId,
       status: 'success',
       operation: 'upsert_motorcycle',
       entity: 'motorcycle',
       targetId: bike.id,
-      detail: `${bike.brand} ${bike.model} (${bike.odometer.toLocaleString()} km)`,
+      detail: `Saved motorcycle ${bike.brand} ${bike.model} (v${result.version})`,
     });
-  } catch (error) {
-    recordCloudSyncOperation({
+
+    return {
+      ...bike,
       userId,
-      status: 'failed',
-      operation: 'upsert_motorcycle',
-      entity: 'motorcycle',
-      targetId: bike.id,
-      detail: `${bike.brand} ${bike.model}`,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+      cloudVersion: result.version,
+      updatedAt: result.tsIso,
+      timestampSource: 'server',
+    };
+  } catch (error: any) {
+    const msg = String(error?.message || '');
     if (
-      error instanceof Error &&
-      (error.message.includes('QUOTA_EXCEEDED') ||
-        error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
+      msg.includes('CONCURRENCY_CONFLICT') ||
+      msg.includes('QUOTA_EXCEEDED') ||
+      msg.includes('PERMISSION_DENIED')
     ) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.WRITE, `motorcycles/${bike.id}`);
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 /**
- * Targeted incremental update for odometer, license plate, or GPS ride completion.
- * Executes inside a Firestore transaction to verify ownership, baseCloudUpdatedAt, and cloudVersion.
+ * Updates specific fields on an existing Motorcycle document in Firestore
+ * inside a transaction with `cloudVersion` increment and concurrency checks.
  */
 export async function updateMotorcycleFieldsInFirestore(
   bikeId: string,
   userId: string,
-  fields: Partial<Pick<Motorcycle, 'odometer' | 'licensePlate' | 'nickname' | 'notes' | 'customColorBadge'>>,
-  concurrency?: WriteConcurrencyOptions
-): Promise<void> {
-  if (!userId || !bikeId || CONFIRMED_SAMPLE_MOTORCYCLE_IDS.has(bikeId)) return;
-  const bikeDocRef = doc(db, 'motorcycles', bikeId);
-  const cleanFields = sanitizeFirestorePayload(fields);
-  let committedIso: string | null = null;
-  let committedVersion = 1;
-
+  fields: Partial<Motorcycle> & Record<string, any>,
+  concurrencyOpts?: ConcurrencyCheckOptions
+): Promise<{ cloudVersion: number; updatedAtIso: string }> {
+  const path = `motorcycles/${bikeId}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const bikeSnap = await transaction.get(bikeDocRef);
+    const bikeRef = doc(db, 'motorcycles', bikeId);
+    const result = await runTransaction(db, async (transaction) => {
+      const bikeSnap = await transaction.get(bikeRef);
+      verifyTransactionConcurrency({
+        entity: 'motorcycle',
+        targetId: bikeId,
+        snapExists: bikeSnap.exists(),
+        cloudData: bikeSnap.data(),
+        opts: concurrencyOpts,
+      });
+
       if (!bikeSnap.exists()) {
-        if (concurrency?.enforceVersionCheck) {
-          throw createConcurrencyConflictError({
-            entity: 'motorcycle',
-            targetId: bikeId,
-            action: 'update_fields',
-            baseCloudUpdatedAt: concurrency.baseCloudUpdatedAt ?? null,
-            currentCloudUpdatedAt: null,
-            baseCloudVersion: concurrency.baseCloudVersion ?? null,
-            currentCloudVersion: null,
-            reason: `Target motorcycle (${bikeId}) no longer exists in Firestore (deleted on another device).`,
-          });
-        }
-        throw new Error(`NOT_FOUND: motorcycles/${bikeId}`);
+        throw new Error(`NOT_FOUND: Motorcycle ${bikeId} does not exist.`);
       }
 
       const existingData = bikeSnap.data() || {};
       if (existingData.userId && existingData.userId !== userId) {
-        throw new Error('PERMISSION_DENIED: Cannot modify a motorcycle owned by another user.');
+        throw new Error(
+          `PERMISSION_DENIED: Cannot update motorcycle (${bikeId}) owned by another user.`
+        );
       }
 
-      if (concurrency?.enforceVersionCheck) {
-        assertTransactionVersionMatches({
-          entity: 'motorcycle',
-          targetId: bikeId,
-          action: 'update_fields',
-          existingData,
-          concurrency,
-        });
-      }
+      const nextVersion = resolveNextCloudVersionForUpdate(existingData, 'motorcycle', bikeId);
+      const { tsValue: tsNow, tsIso } = obtainMonotonicServerTimestamp(existingData.updatedAt);
 
-      committedVersion = resolveNextCloudVersionForUpdate(existingData, 'motorcycle', bikeId);
-
-      const nowTs = nextMonotonicTimestamp();
-      committedIso = nowTs.toDate().toISOString();
-      transaction.update(bikeDocRef, {
-        ...cleanFields,
-        updatedAt: nowTs,
-        cloudVersion: committedVersion,
+      const sanitizedFields = stripUndefined({
+        ...fields,
+        cloudVersion: nextVersion,
+        updatedAt: tsNow,
+        timestampSource: 'server',
       });
+      if (typeof sanitizedFields.photoUrl === 'string' && sanitizedFields.photoUrl.length > 2000) {
+        sanitizedFields.photoUrl = sanitizedFields.photoUrl.slice(0, 2000);
+      }
+
+      transaction.update(bikeRef, sanitizedFields);
+      return { cloudVersion: nextVersion, updatedAtIso: tsIso };
     });
 
-    if (committedIso) {
-      recordKnownCloudVersion(userId, 'motorcycle', bikeId, committedIso, committedVersion);
-    }
-    recordCloudSyncOperation({
-      userId,
-      status: 'success',
-      operation: 'update_motorcycle_fields',
-      entity: 'motorcycle',
-      targetId: bikeId,
-      detail: Object.keys(cleanFields).join(', '),
-    });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId,
-      status: 'failed',
-      operation: 'update_motorcycle_fields',
-      entity: 'motorcycle',
-      targetId: bikeId,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
+    recordKnownCloudVersion(userId, 'motorcycle', bikeId, result.updatedAtIso, result.cloudVersion);
+    return result;
+  } catch (error: any) {
+    const msg = String(error?.message || '');
     if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
+      msg.includes('CONCURRENCY_CONFLICT') ||
+      msg.includes('PERMISSION_DENIED') ||
+      msg.includes('NOT_FOUND')
     ) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.UPDATE, `motorcycles/${bikeId}`);
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
 /**
- * Deletes a motorcycle from the active garage and decrements the user's bikeCount.
- * PHASE 3 DATA RETENTION INVARIANT:
- * - Service records (/serviceRecords) are PRESERVED by default even when a motorcycle is sold or removed.
- * - Maintenance reminders (/reminders) for the removed bike are cleaned up by default unless deleteReminders === false.
- * - Permanent service-history deletion requires explicit deleteServiceHistoryConfirmed === true.
+ * Deletes a Motorcycle document from Firestore and atomically decrements `bikeCount` on `/users/{userId}`.
+ * By default (`deleteReminders !== false`), removes scheduled reminders for this bike in chunked batches
+ * while preserving historical `serviceRecords` unless `deleteServiceHistoryConfirmed: true` is passed.
  */
 export async function deleteMotorcycleFromFirestore(
   bikeId: string,
   userId?: string,
-  options?: {
+  options?: ConcurrencyCheckOptions & {
     deleteReminders?: boolean;
     deleteServiceHistoryConfirmed?: boolean;
-    concurrency?: WriteConcurrencyOptions;
   }
 ): Promise<void> {
-  const currentUserId = userId || auth.currentUser?.uid;
-  if (!currentUserId) {
-    throw new Error('AUTH_REQUIRED: You must be logged in to delete a motorcycle.');
-  }
-
-  const deleteReminders = options?.deleteReminders ?? true;
-  const deleteServiceHistoryConfirmed = options?.deleteServiceHistoryConfirmed ?? false;
-  const concurrency = options?.concurrency;
-
-  const bikeDocRef = doc(db, 'motorcycles', bikeId);
-  const userDocRef = doc(db, 'users', currentUserId);
-
+  const path = `motorcycles/${bikeId}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const bikeSnap = await transaction.get(bikeDocRef);
-      const userSnap = await transaction.get(userDocRef);
+    const bikeRef = doc(db, 'motorcycles', bikeId);
+    const resolvedOwnerId = await runTransaction(db, async (transaction) => {
+      const bikeSnap = await transaction.get(bikeRef);
+      verifyTransactionConcurrency({
+        entity: 'motorcycle',
+        targetId: bikeId,
+        snapExists: bikeSnap.exists(),
+        cloudData: bikeSnap.data(),
+        opts: options,
+      });
 
-      if (bikeSnap.exists()) {
-        const existingData = bikeSnap.data() || {};
-        const existingOwner = existingData.userId;
-        if (existingOwner && existingOwner !== currentUserId) {
-          throw new Error('PERMISSION_DENIED: Cannot delete a motorcycle owned by another user.');
-        }
+      if (!bikeSnap.exists()) return userId || null;
 
-        if (concurrency?.enforceVersionCheck) {
-          assertTransactionVersionMatches({
-            entity: 'motorcycle',
-            targetId: bikeId,
-            action: 'delete',
-            existingData,
-            concurrency,
-          });
-        }
+      const existingData = bikeSnap.data() || {};
+      if (userId && existingData.userId && existingData.userId !== userId) {
+        throw new Error(
+          `PERMISSION_DENIED: Cannot delete motorcycle (${bikeId}) owned by another user.`
+        );
+      }
 
-        const currentCount =
-          userSnap.exists() && typeof userSnap.data()?.bikeCount === 'number'
-            ? userSnap.data().bikeCount
-            : 1;
+      const ownerId = userId || existingData.userId;
+      if (ownerId) {
+        const userRef = doc(db, 'users', ownerId);
+        const userSnap = await transaction.get(userRef);
 
-        const newCount = Math.max(0, currentCount - 1);
-        const nowIso = nextMonotonicTimestamp().toDate().toISOString();
+        transaction.delete(bikeRef);
 
-        transaction.delete(bikeDocRef);
         if (userSnap.exists()) {
-          transaction.update(userDocRef, {
-            bikeCount: newCount,
+          const userData = userSnap.data();
+          const currentCount =
+            typeof userData.bikeCount === 'number' ? userData.bikeCount : 1;
+          const nextCount = Math.max(0, currentCount - 1);
+
+          transaction.update(userRef, {
+            bikeCount: nextCount,
             lastBikeId: bikeId,
             lastBikeAction: 'delete',
-            updatedAt: nowIso,
+            updatedAt: serverTimestamp(),
           });
         }
+      } else {
+        transaction.delete(bikeRef);
       }
+      return ownerId || null;
     });
 
-    removeKnownCloudVersion(currentUserId, 'motorcycle', bikeId);
+    if (resolvedOwnerId) {
+      removeKnownCloudVersion(resolvedOwnerId, 'motorcycle', bikeId);
 
-    // Clean up active reminders for this removed bike in safe chunks
-    if (deleteReminders) {
-      const remQuery = query(
-        collection(db, 'reminders'),
-        where('userId', '==', currentUserId)
-      );
-      const remSnap = await getDocs(remQuery);
-      const matchingDocs = remSnap.docs.filter((d) => d.data()?.bikeId === bikeId);
-      for (let i = 0; i < matchingDocs.length; i += SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE) {
-        const chunk = matchingDocs.slice(i, i + SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE);
-        const batch = writeBatch(db);
-        chunk.forEach((d) => {
-          batch.delete(d.ref);
-          removeKnownCloudVersion(currentUserId, 'reminder', d.id);
-        });
-        await batch.commit();
+      // Delete associated reminders in chunked batches of SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE (50)
+      if (options?.deleteReminders !== false) {
+        const remsSnap = await getDocs(
+          query(collection(db, 'reminders'), where('userId', '==', resolvedOwnerId))
+        );
+        const matchingRemDocs = remsSnap.docs.filter((d) => d.data()?.bikeId === bikeId);
+        for (let i = 0; i < matchingRemDocs.length; i += SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE) {
+          const chunk = matchingRemDocs.slice(i, i + SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE);
+          const batch = writeBatch(db);
+          for (const remDoc of chunk) {
+            batch.delete(remDoc.ref);
+            removeKnownCloudVersion(resolvedOwnerId, 'reminder', remDoc.id);
+          }
+          await batch.commit();
+        }
+      }
+
+      // Only delete service history when explicitly confirmed
+      if (options?.deleteServiceHistoryConfirmed === true) {
+        const recsSnap = await getDocs(
+          query(collection(db, 'serviceRecords'), where('userId', '==', resolvedOwnerId))
+        );
+        const matchingRecDocs = recsSnap.docs.filter((d) => d.data()?.bikeId === bikeId);
+        for (let i = 0; i < matchingRecDocs.length; i += SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE) {
+          const chunk = matchingRecDocs.slice(i, i + SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE);
+          const batch = writeBatch(db);
+          for (const recDoc of chunk) {
+            batch.delete(recDoc.ref);
+            removeKnownCloudVersion(resolvedOwnerId, 'serviceRecord', recDoc.id);
+          }
+          await batch.commit();
+        }
       }
     }
-
-    // ONLY delete service records if the user explicitly confirmed permanent history deletion (chunked safely)
-    if (deleteServiceHistoryConfirmed) {
-      const recQuery = query(
-        collection(db, 'serviceRecords'),
-        where('userId', '==', currentUserId)
-      );
-      const recSnap = await getDocs(recQuery);
-      const matchingRecs = recSnap.docs.filter((d) => d.data()?.bikeId === bikeId);
-      for (let i = 0; i < matchingRecs.length; i += SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE) {
-        const chunk = matchingRecs.slice(i, i + SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE);
-        const batch = writeBatch(db);
-        chunk.forEach((d) => {
-          batch.delete(d.ref);
-          removeKnownCloudVersion(currentUserId, 'serviceRecord', d.id);
-        });
-        await batch.commit();
-      }
-    }
-    recordCloudSyncOperation({
-      userId: currentUserId,
-      status: 'success',
-      operation: 'delete_motorcycle',
-      entity: 'motorcycle',
-      targetId: bikeId,
-      detail: deleteServiceHistoryConfirmed ? 'Deleted with history' : 'Removed bike (history preserved)',
-    });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId: currentUserId,
-      status: 'failed',
-      operation: 'delete_motorcycle',
-      entity: 'motorcycle',
-      targetId: bikeId,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (msg.includes('CONCURRENCY_CONFLICT') || msg.includes('PERMISSION_DENIED')) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.DELETE, `motorcycles/${bikeId}`);
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
-export async function fetchUserMotorcyclesOnce(userId: string): Promise<Motorcycle[]> {
-  if (!userId) return [];
-  const path = 'motorcycles';
-  try {
-    const q = query(collection(db, 'motorcycles'), where('userId', '==', userId));
-    const snap = await getDocs(q);
-    const items: Motorcycle[] = [];
-    snap.forEach((docSnap) => {
-      items.push(normalizeMotorcycleFromFirestore({ id: docSnap.id, ...docSnap.data() }));
-    });
-    return items;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
-
-export function subscribeToUserMotorcycles(
-  userId: string,
-  callback: (bikes: Motorcycle[]) => void,
-  onError?: (err: unknown) => void
-): () => void {
-  const path = 'motorcycles';
-  const q = query(collection(db, 'motorcycles'), where('userId', '==', userId));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const fromCache = Boolean((snapshot as any)?.metadata?.fromCache);
-      const bikes: Motorcycle[] = [];
-      snapshot.forEach((docSnap) => {
-        const hasPending =
-          Boolean((docSnap as any)?.metadata?.hasPendingWrites) || fromCache;
-        bikes.push(
-          normalizeMotorcycleFromFirestore(
-            { id: docSnap.id, ...docSnap.data() },
-            hasPending
-          )
-        );
-      });
-      callback(bikes);
-    },
-    (error) => {
-      onError?.(error);
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Prevent uncaught listener throw after reporting
-      }
-    }
-  );
-}
-
-// ============================================================================
-// 11. Maintenance Reminders Firestore CRUD & Real-Time Subscription
-// ============================================================================
-
+/**
+ * Saves or updates a Maintenance Reminder document in Firestore with monotonic `cloudVersion`
+ */
 export async function saveReminderToFirestore(
   reminder: MaintenanceReminder,
   userId: string,
-  concurrency?: WriteConcurrencyOptions
-): Promise<void> {
-  if (!userId || !reminder?.id || CONFIRMED_SAMPLE_REMINDER_IDS.has(reminder.id)) return;
-  const remDocRef = doc(db, 'reminders', reminder.id);
-  const cleanPayload = sanitizeFirestorePayload(reminder);
-  let committedIso: string | null = null;
-  let committedVersion = 1;
-
+  concurrencyOpts?: ConcurrencyCheckOptions
+): Promise<MaintenanceReminder> {
+  const path = `reminders/${reminder.id}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const existing = await transaction.get(remDocRef);
-      const nowTs = nextMonotonicTimestamp();
-      committedIso = nowTs.toDate().toISOString();
+    const remRef = doc(db, 'reminders', reminder.id);
+    const result = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(remRef);
+      verifyTransactionConcurrency({
+        entity: 'reminder',
+        targetId: reminder.id,
+        snapExists: snap.exists(),
+        cloudData: snap.data(),
+        opts: concurrencyOpts,
+      });
 
-      if (existing.exists()) {
-        const existingData = existing.data() || {};
+      let version = 1;
+      let prevUpdatedAt: any;
+      if (snap.exists()) {
+        const existingData = snap.data() || {};
         if (existingData.userId && existingData.userId !== userId) {
-          throw new Error('PERMISSION_DENIED: Cannot modify a reminder owned by another user.');
+          throw new Error(
+            `PERMISSION_DENIED: Cannot modify reminder (${reminder.id}) owned by another user.`
+          );
         }
-        if (concurrency?.enforceVersionCheck) {
-          assertTransactionVersionMatches({
-            entity: 'reminder',
-            targetId: reminder.id,
-            action: 'upsert',
-            existingData,
-            concurrency,
-          });
-        }
-        committedVersion = resolveNextCloudVersionForUpdate(existingData, 'reminder', reminder.id);
-        transaction.update(remDocRef, {
-          ...cleanPayload,
-          id: reminder.id,
-          userId,
-          updatedAt: nowTs,
-          cloudVersion: committedVersion,
-        });
-      } else {
-        if (concurrency?.enforceVersionCheck && concurrency.baseVersionUntrusted) {
-          throw createConcurrencyConflictError({
-            entity: 'reminder',
-            targetId: reminder.id,
-            action: 'upsert',
-            baseCloudUpdatedAt: null,
-            currentCloudUpdatedAt: null,
-            baseCloudVersion: null,
-            currentCloudVersion: null,
-            reason: `Legacy queued reminder mutation (${reminder.id}) is missing a trustworthy base version. Conflict review required.`,
-          });
-        }
-        committedVersion = 1;
-        transaction.set(remDocRef, {
-          ...cleanPayload,
-          id: reminder.id,
-          userId,
-          createdAt: nowTs,
-          updatedAt: nowTs,
-          cloudVersion: committedVersion,
-        });
+        version = resolveNextCloudVersionForUpdate(existingData, 'reminder', reminder.id);
+        prevUpdatedAt = existingData.updatedAt;
       }
+
+      const { tsValue: tsNow, tsIso } = obtainMonotonicServerTimestamp(prevUpdatedAt);
+
+      const payload = stripUndefined({
+        ...reminder,
+        userId,
+        cloudVersion: version,
+        createdAt: snap.exists() ? snap.data()?.createdAt || tsNow : tsNow,
+        updatedAt: tsNow,
+        timestampSource: 'server',
+      });
+      transaction.set(remRef, payload, { merge: true });
+      return { version, tsIso };
     });
 
-    if (committedIso) {
-      recordKnownCloudVersion(userId, 'reminder', reminder.id, committedIso, committedVersion);
-    }
-    recordCloudSyncOperation({
+    recordKnownCloudVersion(userId, 'reminder', reminder.id, result.tsIso, result.version);
+
+    return {
+      ...reminder,
       userId,
-      status: 'success',
-      operation: 'upsert_reminder',
-      entity: 'reminder',
-      targetId: reminder.id,
-      detail: reminder.title,
-    });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId,
-      status: 'failed',
-      operation: 'upsert_reminder',
-      entity: 'reminder',
-      targetId: reminder.id,
-      detail: reminder.title,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
+      cloudVersion: result.version,
+      updatedAt: result.tsIso,
+      timestampSource: 'server',
+    };
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (msg.includes('CONCURRENCY_CONFLICT') || msg.includes('PERMISSION_DENIED')) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.WRITE, `reminders/${reminder.id}`);
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
+/**
+ * Transactional Batch Helper for Reminders:
+ * Splits writes into `SAFE_BATCH_TRANSACTION_CHUNK_SIZE` (8) chunks so each transaction
+ * stays well below the 20-document-access rules limit, performs all reads before writes,
+ * validates parent motorcycle ownership, and protects newer cloud revisions.
+ */
 export async function saveRemindersBatchToFirestore(
   reminders: MaintenanceReminder[],
   userId: string,
   options?:
+    | Record<string, ConcurrencyCheckOptions | any>
     | {
-        concurrencyById?: Record<string, WriteConcurrencyOptions>;
-        defaultConcurrency?: WriteConcurrencyOptions;
         onChunkCommitted?: (committedIds: string[]) => void;
+        concurrencyMap?: Record<string, ConcurrencyCheckOptions>;
       }
-    | Record<string, WriteConcurrencyOptions>
 ): Promise<void> {
-  if (!userId || reminders.length === 0) return;
-  const validReminders = reminders.filter(
-    (r) => r && r.id && !CONFIRMED_SAMPLE_REMINDER_IDS.has(r.id)
-  );
-  if (validReminders.length === 0) return;
+  if (!reminders || reminders.length === 0) return;
 
-  // Conservative chunk size of 8 guarantees <= 16 Security Rules document-access calls per transaction (limit: 20)
-  const CHUNK_SIZE = SAFE_BATCH_TRANSACTION_CHUNK_SIZE;
-  const nowTs = nextMonotonicTimestamp();
-  const nowIso = nowTs.toDate().toISOString();
+  const onChunkCommitted =
+    typeof (options as any)?.onChunkCommitted === 'function'
+      ? ((options as any).onChunkCommitted as (ids: string[]) => void)
+      : undefined;
+  const concurrencyMap: Record<string, ConcurrencyCheckOptions> =
+    (options as any)?.concurrencyMap || (options as Record<string, ConcurrencyCheckOptions>) || {};
 
-  const isStructuredOptions =
-    Boolean(options) &&
-    ('concurrencyById' in (options as object) ||
-      'defaultConcurrency' in (options as object) ||
-      'onChunkCommitted' in (options as object));
+  for (let i = 0; i < reminders.length; i += SAFE_BATCH_TRANSACTION_CHUNK_SIZE) {
+    const chunk = reminders.slice(i, i + SAFE_BATCH_TRANSACTION_CHUNK_SIZE);
 
-  const resolveItemConcurrency = (remId: string): WriteConcurrencyOptions | undefined => {
-    if (!options) return undefined;
-    if (isStructuredOptions) {
-      const structured = options as {
-        concurrencyById?: Record<string, WriteConcurrencyOptions>;
-        defaultConcurrency?: WriteConcurrencyOptions;
-      };
-      return structured.concurrencyById?.[remId] ?? structured.defaultConcurrency;
-    }
-    return (options as Record<string, WriteConcurrencyOptions>)[remId];
-  };
+    const committedChunkMeta = await runTransaction(db, async (transaction) => {
+      // 1. ALL READS FIRST: read distinct parent motorcycles and target reminder documents
+      const distinctBikeIds = Array.from(
+        new Set(chunk.map((r) => r.bikeId).filter((id): id is string => Boolean(id)))
+      );
+      const bikeSnaps = new Map<string, any>();
+      for (const bikeId of distinctBikeIds) {
+        const bSnap = await transaction.get(doc(db, 'motorcycles', bikeId));
+        bikeSnaps.set(bikeId, bSnap);
+      }
 
-  const onChunkCommitted = isStructuredOptions
-    ? (options as { onChunkCommitted?: (committedIds: string[]) => void }).onChunkCommitted
-    : undefined;
+      const remSnaps = new Map<string, any>();
+      for (const rem of chunk) {
+        const rSnap = await transaction.get(doc(db, 'reminders', rem.id));
+        remSnaps.set(rem.id, rSnap);
+      }
 
-  try {
-    for (let i = 0; i < validReminders.length; i += CHUNK_SIZE) {
-      const chunk = validReminders.slice(i, i + CHUNK_SIZE);
-      const committedVersions = new Map<string, number>();
-
-      await runTransaction(db, async (transaction) => {
-        const refs = chunk.map((rem) => doc(db, 'reminders', rem.id));
-        const distinctBikeIds = Array.from(
-          new Set(chunk.map((rem) => rem.bikeId).filter((id): id is string => Boolean(id)))
-        );
-        const bikeRefs = distinctBikeIds.map((bId) => doc(db, 'motorcycles', bId));
-
-        // Read all reminder docs and parent motorcycle docs BEFORE performing any writes
-        const [snaps, bikeSnaps] = await Promise.all([
-          Promise.all(refs.map((ref) => transaction.get(ref))),
-          Promise.all(bikeRefs.map((bRef) => transaction.get(bRef))),
-        ]);
-
-        const bikeOwnerById = new Map<string, string | null>();
-        for (let bIdx = 0; bIdx < distinctBikeIds.length; bIdx++) {
-          const bSnap = bikeSnaps[bIdx];
-          bikeOwnerById.set(
-            distinctBikeIds[bIdx],
-            bSnap.exists() ? (bSnap.data()?.userId ?? null) : null
-          );
-        }
-
-        for (let idx = 0; idx < chunk.length; idx++) {
-          const rem = chunk[idx];
-          const ref = refs[idx];
-          const existing = snaps[idx];
-          const cleanPayload = sanitizeFirestorePayload(rem);
-          const itemConcurrency = resolveItemConcurrency(rem.id);
-
-          // Verify parent motorcycle exists and is owned by userId (mirrors firestore.rules)
-          const parentOwner = bikeOwnerById.get(rem.bikeId);
-          if (!parentOwner || parentOwner !== userId) {
+      // 2. VALIDATE & STAGE WRITES
+      const committed: Array<{ id: string; version: number; tsIso: string }> = [];
+      for (const rem of chunk) {
+        if (rem.bikeId) {
+          const parentSnap = bikeSnaps.get(rem.bikeId);
+          if (!parentSnap || !parentSnap.exists() || parentSnap.data()?.userId !== userId) {
             throw new Error(
               `PERMISSION_DENIED: Reminder (${rem.id}) references nonexistent or unauthorized parent motorcycle (${rem.bikeId}).`
             );
           }
-
-          if (existing.exists()) {
-            const existingData = existing.data() || {};
-            if (existingData.userId && existingData.userId !== userId) {
-              throw new Error('PERMISSION_DENIED: Cannot modify a reminder owned by another user.');
-            }
-            if (itemConcurrency?.enforceVersionCheck) {
-              assertTransactionVersionMatches({
-                entity: 'reminder',
-                targetId: rem.id,
-                action: 'upsert',
-                existingData,
-                concurrency: itemConcurrency,
-              });
-            } else {
-              // Default batch conflict protection: never overwrite a cloud reminder with a higher revision, odometer, or newer timestamp
-              const cloudRev =
-                typeof existingData.cloudVersion === 'number' ? existingData.cloudVersion : null;
-              const localRev =
-                typeof rem.cloudVersion === 'number' ? rem.cloudVersion : null;
-              const cloudOdo =
-                typeof existingData.lastCompletedOdo === 'number'
-                  ? existingData.lastCompletedOdo
-                  : 0;
-              const localOdo =
-                typeof rem.lastCompletedOdo === 'number' ? rem.lastCompletedOdo : 0;
-              const cloudMs =
-                parseTimestampToMillis(existingData.updatedAt) ??
-                parseTimestampToMillis(existingData.createdAt);
-              const localMs =
-                parseTimestampToMillis(rem.updatedAt) ??
-                parseTimestampToMillis(rem.createdAt);
-              if (
-                (cloudRev !== null && localRev !== null && cloudRev > localRev) ||
-                cloudOdo > localOdo ||
-                (cloudMs !== null && localMs !== null && cloudMs > localMs)
-              ) {
-                continue;
-              }
-            }
-            const nextVersion = resolveNextCloudVersionForUpdate(
-              existingData,
-              'reminder',
-              rem.id
-            );
-            committedVersions.set(rem.id, nextVersion);
-            transaction.update(ref, {
-              ...cleanPayload,
-              id: rem.id,
-              userId,
-              updatedAt: nowTs,
-              cloudVersion: nextVersion,
-            });
-          } else {
-            if (itemConcurrency?.enforceVersionCheck && itemConcurrency.baseVersionUntrusted) {
-              throw createConcurrencyConflictError({
-                entity: 'reminder',
-                targetId: rem.id,
-                action: 'upsert',
-                baseCloudUpdatedAt: null,
-                currentCloudUpdatedAt: null,
-                baseCloudVersion: null,
-                currentCloudVersion: null,
-                reason: `Legacy batch reminder mutation (${rem.id}) is missing a trustworthy base version.`,
-              });
-            }
-            committedVersions.set(rem.id, 1);
-            transaction.set(ref, {
-              ...cleanPayload,
-              id: rem.id,
-              userId,
-              createdAt: nowTs,
-              updatedAt: nowTs,
-              cloudVersion: 1,
-            });
-          }
         }
-      });
 
-      for (const [remId, ver] of committedVersions.entries()) {
-        recordKnownCloudVersion(userId, 'reminder', remId, nowIso, ver);
+        const rSnap = remSnaps.get(rem.id);
+        const itemOpts = concurrencyMap[rem.id];
+        if (itemOpts && typeof itemOpts === 'object' && 'enforceVersionCheck' in itemOpts) {
+          verifyTransactionConcurrency({
+            entity: 'reminder',
+            targetId: rem.id,
+            snapExists: rSnap.exists(),
+            cloudData: rSnap.data(),
+            opts: itemOpts,
+          });
+        }
+
+        const tsNow = serverTimestamp();
+        const tsIso = normalizeFirestoreTimestampToIso(tsNow) || new Date().toISOString();
+
+        if (rSnap.exists()) {
+          const existingData = rSnap.data() || {};
+          if (existingData.userId && existingData.userId !== userId) {
+            throw new Error(
+              `PERMISSION_DENIED: Cannot modify reminder (${rem.id}) owned by another user.`
+            );
+          }
+
+          // Protect newer cloud revision when not explicitly forcing overwrite
+          const cloudVer =
+            typeof existingData.cloudVersion === 'number' ? existingData.cloudVersion : null;
+          const localVer = typeof rem.cloudVersion === 'number' ? rem.cloudVersion : null;
+          if (cloudVer !== null && localVer !== null && localVer < cloudVer) {
+            continue;
+          }
+          const cloudMs = parseTimestampToMillis(existingData.updatedAt);
+          const localMs = parseTimestampToMillis(rem.updatedAt);
+          if (cloudMs !== null && localMs !== null && localMs < cloudMs && cloudVer !== null) {
+            continue;
+          }
+
+          const nextVersion = resolveNextCloudVersionForUpdate(existingData, 'reminder', rem.id);
+          const payload = stripUndefined({
+            ...rem,
+            userId,
+            cloudVersion: nextVersion,
+            updatedAt: tsNow,
+            timestampSource: 'server',
+          });
+          transaction.set(doc(db, 'reminders', rem.id), payload, { merge: true });
+          committed.push({ id: rem.id, version: nextVersion, tsIso });
+        } else {
+          const payload = stripUndefined({
+            ...rem,
+            userId,
+            cloudVersion: 1,
+            createdAt: tsNow,
+            updatedAt: tsNow,
+            timestampSource: 'server',
+          });
+          transaction.set(doc(db, 'reminders', rem.id), payload);
+          committed.push({ id: rem.id, version: 1, tsIso });
+        }
       }
-      onChunkCommitted?.(chunk.map((r) => r.id));
-    }
-    recordCloudSyncOperation({
-      userId,
-      status: 'success',
-      operation: 'batch_upsert_reminders',
-      entity: 'reminder',
-      detail: `${validReminders.length} reminder(s) synced`,
+
+      return committed;
     });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId,
-      status: 'failed',
-      operation: 'batch_upsert_reminders',
-      entity: 'reminder',
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
-      throw error;
+
+    for (const meta of committedChunkMeta) {
+      recordKnownCloudVersion(userId, 'reminder', meta.id, meta.tsIso, meta.version);
     }
-    handleFirestoreError(error, OperationType.WRITE, 'reminders/batch');
+    if (onChunkCommitted) {
+      onChunkCommitted(chunk.map((r) => r.id));
+    }
   }
 }
 
+/**
+ * Deletes a Maintenance Reminder document from Firestore
+ */
 export async function deleteReminderFromFirestore(
   reminderId: string,
   userId?: string,
-  concurrency?: WriteConcurrencyOptions
+  concurrencyOpts?: ConcurrencyCheckOptions
 ): Promise<void> {
-  const currentUserId = userId || auth.currentUser?.uid;
-  if (!currentUserId || !reminderId) return;
-  const remDocRef = doc(db, 'reminders', reminderId);
+  const path = `reminders/${reminderId}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const existing = await transaction.get(remDocRef);
-      if (existing.exists()) {
-        const existingData = existing.data() || {};
-        if (existingData.userId && existingData.userId !== currentUserId) {
-          throw new Error('PERMISSION_DENIED: Cannot delete a reminder owned by another user.');
+    const remRef = doc(db, 'reminders', reminderId);
+    if (concurrencyOpts?.enforceVersionCheck) {
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(remRef);
+        verifyTransactionConcurrency({
+          entity: 'reminder',
+          targetId: reminderId,
+          snapExists: snap.exists(),
+          cloudData: snap.data(),
+          opts: concurrencyOpts,
+        });
+        if (snap.exists()) {
+          if (userId && snap.data()?.userId && snap.data()?.userId !== userId) {
+            throw new Error(
+              `PERMISSION_DENIED: Cannot delete reminder (${reminderId}) owned by another user.`
+            );
+          }
+          transaction.delete(remRef);
         }
-        if (concurrency?.enforceVersionCheck) {
-          assertTransactionVersionMatches({
-            entity: 'reminder',
-            targetId: reminderId,
-            action: 'delete',
-            existingData,
-            concurrency,
-          });
-        }
-        transaction.delete(remDocRef);
-      }
-    });
-    removeKnownCloudVersion(currentUserId, 'reminder', reminderId);
-    recordCloudSyncOperation({
-      userId: currentUserId,
-      status: 'success',
-      operation: 'delete_reminder',
-      entity: 'reminder',
-      targetId: reminderId,
-    });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId: currentUserId,
-      status: 'failed',
-      operation: 'delete_reminder',
-      entity: 'reminder',
-      targetId: reminderId,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
+      });
+    } else {
+      await deleteDoc(remRef);
+    }
+    if (userId) {
+      removeKnownCloudVersion(userId, 'reminder', reminderId);
+    }
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (msg.includes('CONCURRENCY_CONFLICT') || msg.includes('PERMISSION_DENIED')) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.DELETE, `reminders/${reminderId}`);
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
-
-export async function fetchUserRemindersOnce(userId: string): Promise<MaintenanceReminder[]> {
-  if (!userId) return [];
-  const path = 'reminders';
-  try {
-    const q = query(collection(db, 'reminders'), where('userId', '==', userId));
-    const snap = await getDocs(q);
-    const items: MaintenanceReminder[] = [];
-    snap.forEach((docSnap) => {
-      items.push(normalizeReminderFromFirestore({ id: docSnap.id, ...docSnap.data() }));
-    });
-    return items;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
-  }
-}
-
-export function subscribeToUserReminders(
-  userId: string,
-  callback: (reminders: MaintenanceReminder[]) => void,
-  onError?: (err: unknown) => void
-): () => void {
-  const path = 'reminders';
-  const q = query(collection(db, 'reminders'), where('userId', '==', userId));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const fromCache = Boolean((snapshot as any)?.metadata?.fromCache);
-      const items: MaintenanceReminder[] = [];
-      snapshot.forEach((docSnap) => {
-        const hasPending =
-          Boolean((docSnap as any)?.metadata?.hasPendingWrites) || fromCache;
-        items.push(
-          normalizeReminderFromFirestore(
-            { id: docSnap.id, ...docSnap.data() },
-            hasPending
-          )
-        );
-      });
-      callback(items);
-    },
-    (error) => {
-      onError?.(error);
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Prevent uncaught listener throw
-      }
-    }
-  );
-}
-
-// ============================================================================
-// 12. Service Records Firestore CRUD & Real-Time Subscription
-// ============================================================================
 
 /**
- * Saves a service record to Firestore inside an atomic transaction and, if a linked
- * reminder was reset by this service, updates that reminder in the same transaction
- * with full ownership and concurrency verification on both documents.
+ * Saves or updates a Service Record document in Firestore (with optional atomic linked reminder reset)
  */
 export async function saveServiceRecordToFirestore(
   record: ServiceRecord,
   userId: string,
-  updatedLinkedReminder?: MaintenanceReminder,
-  concurrency?: WriteConcurrencyOptions,
-  linkedReminderConcurrency?: WriteConcurrencyOptions
-): Promise<void> {
-  if (!userId || !record?.id || CONFIRMED_SAMPLE_SERVICE_RECORD_IDS.has(record.id)) return;
-  const recDocRef = doc(db, 'serviceRecords', record.id);
-  const cleanRecord = sanitizeFirestorePayload(record);
-  let committedIso: string | null = null;
-  let committedRecordVersion = 1;
-  let committedReminderVersion = 1;
-
+  linkedReminderToUpdate?: MaintenanceReminder,
+  concurrencyOpts?: ConcurrencyCheckOptions
+): Promise<ServiceRecord> {
+  const path = `serviceRecords/${record.id}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const existing = await transaction.get(recDocRef);
-      const remDocRef =
-        updatedLinkedReminder && updatedLinkedReminder.id
-          ? doc(db, 'reminders', updatedLinkedReminder.id)
-          : null;
-      const existingRem = remDocRef ? await transaction.get(remDocRef) : null;
+    const recRef = doc(db, 'serviceRecords', record.id);
+    const result = await runTransaction(db, async (transaction) => {
+      // Read all docs before writes
+      const recSnap = await transaction.get(recRef);
+      const remRef = linkedReminderToUpdate
+        ? doc(db, 'reminders', linkedReminderToUpdate.id)
+        : null;
+      const remSnap = remRef ? await transaction.get(remRef) : null;
 
-      const nowTs = nextMonotonicTimestamp();
-      committedIso = nowTs.toDate().toISOString();
+      verifyTransactionConcurrency({
+        entity: 'serviceRecord',
+        targetId: record.id,
+        snapExists: recSnap.exists(),
+        cloudData: recSnap.data(),
+        opts: concurrencyOpts,
+      });
 
-      if (existing.exists()) {
-        const existingData = existing.data() || {};
+      let recVersion = 1;
+      let prevUpdatedAt: any;
+      if (recSnap.exists()) {
+        const existingData = recSnap.data() || {};
         if (existingData.userId && existingData.userId !== userId) {
-          throw new Error('PERMISSION_DENIED: Cannot modify a service record owned by another user.');
-        }
-        if (concurrency?.enforceVersionCheck) {
-          assertTransactionVersionMatches({
-            entity: 'serviceRecord',
-            targetId: record.id,
-            action: 'upsert',
-            existingData,
-            concurrency,
-          });
-        }
-        committedRecordVersion = resolveNextCloudVersionForUpdate(
-          existingData,
-          'serviceRecord',
-          record.id
-        );
-        transaction.update(recDocRef, {
-          ...cleanRecord,
-          id: record.id,
-          userId,
-          updatedAt: nowTs,
-          cloudVersion: committedRecordVersion,
-        });
-      } else {
-        if (concurrency?.enforceVersionCheck && concurrency.baseVersionUntrusted) {
-          throw createConcurrencyConflictError({
-            entity: 'serviceRecord',
-            targetId: record.id,
-            action: 'upsert',
-            baseCloudUpdatedAt: null,
-            currentCloudUpdatedAt: null,
-            baseCloudVersion: null,
-            currentCloudVersion: null,
-            reason: `Legacy queued service record mutation (${record.id}) is missing a trustworthy base version. Conflict review required.`,
-          });
-        }
-        committedRecordVersion = 1;
-        transaction.set(recDocRef, {
-          ...cleanRecord,
-          id: record.id,
-          userId,
-          createdAt: nowTs,
-          updatedAt: nowTs,
-          cloudVersion: committedRecordVersion,
-        });
-      }
-
-      if (remDocRef && updatedLinkedReminder) {
-        const cleanRem = sanitizeFirestorePayload(updatedLinkedReminder);
-        if (existingRem?.exists()) {
-          const remData = existingRem.data() || {};
-          if (remData.userId && remData.userId !== userId) {
-            throw new Error('PERMISSION_DENIED: Cannot modify a reminder owned by another user.');
-          }
-          if (linkedReminderConcurrency?.enforceVersionCheck) {
-            assertTransactionVersionMatches({
-              entity: 'reminder',
-              targetId: updatedLinkedReminder.id,
-              action: 'upsert',
-              existingData: remData,
-              concurrency: linkedReminderConcurrency,
-            });
-          }
-          committedReminderVersion = resolveNextCloudVersionForUpdate(
-            remData,
-            'reminder',
-            updatedLinkedReminder.id
+          throw new Error(
+            `PERMISSION_DENIED: Cannot modify service record (${record.id}) owned by another user.`
           );
-          transaction.update(remDocRef, {
-            ...cleanRem,
-            id: updatedLinkedReminder.id,
-            userId,
-            updatedAt: nowTs,
-            cloudVersion: committedReminderVersion,
-          });
-        } else {
-          if (
-            linkedReminderConcurrency?.enforceVersionCheck &&
-            linkedReminderConcurrency.baseVersionUntrusted
-          ) {
-            throw createConcurrencyConflictError({
-              entity: 'reminder',
-              targetId: updatedLinkedReminder.id,
-              action: 'upsert',
-              baseCloudUpdatedAt: null,
-              currentCloudUpdatedAt: null,
-              baseCloudVersion: null,
-              currentCloudVersion: null,
-              reason: `Linked reminder mutation (${updatedLinkedReminder.id}) is missing a trustworthy base version.`,
-            });
-          }
-          committedReminderVersion = 1;
-          transaction.set(remDocRef, {
-            ...cleanRem,
-            id: updatedLinkedReminder.id,
-            userId,
-            createdAt: nowTs,
-            updatedAt: nowTs,
-            cloudVersion: committedReminderVersion,
-          });
         }
+        recVersion = resolveNextCloudVersionForUpdate(existingData, 'serviceRecord', record.id);
+        prevUpdatedAt = existingData.updatedAt;
       }
+
+      const { tsValue: tsNow, tsIso } = obtainMonotonicServerTimestamp(prevUpdatedAt);
+
+      const sanitizedParts = Array.isArray(record.parts)
+        ? record.parts.slice(0, 50).map((p) => ({
+            name: String(p.name || '').slice(0, 200),
+            costPhp: Number(p.costPhp) || 0,
+          }))
+        : [];
+
+      const recPayload = stripUndefined({
+        ...record,
+        parts: sanitizedParts,
+        userId,
+        cloudVersion: recVersion,
+        createdAt: recSnap.exists() ? recSnap.data()?.createdAt || tsNow : tsNow,
+        updatedAt: tsNow,
+        timestampSource: 'server',
+      });
+      if (typeof recPayload.photoUrl === 'string' && recPayload.photoUrl.length > 2000) {
+        recPayload.photoUrl = recPayload.photoUrl.slice(0, 2000);
+      }
+
+      transaction.set(recRef, recPayload, { merge: true });
+
+      let remVersion: number | null = null;
+      if (linkedReminderToUpdate && remRef) {
+        remVersion =
+          remSnap && remSnap.exists()
+            ? resolveNextCloudVersionForUpdate(
+                remSnap.data(),
+                'reminder',
+                linkedReminderToUpdate.id
+              )
+            : 1;
+        const remPayload = stripUndefined({
+          ...linkedReminderToUpdate,
+          userId,
+          cloudVersion: remVersion,
+          updatedAt: tsNow,
+          timestampSource: 'server',
+        });
+        transaction.set(remRef, remPayload, { merge: true });
+      }
+
+      return { recVersion, remVersion, tsIso };
     });
 
-    if (committedIso) {
-      recordKnownCloudVersion(userId, 'serviceRecord', record.id, committedIso, committedRecordVersion);
-      if (updatedLinkedReminder?.id) {
-        recordKnownCloudVersion(
-          userId,
-          'reminder',
-          updatedLinkedReminder.id,
-          committedIso,
-          committedReminderVersion
-        );
-      }
+    recordKnownCloudVersion(userId, 'serviceRecord', record.id, result.tsIso, result.recVersion);
+    if (linkedReminderToUpdate && result.remVersion !== null) {
+      recordKnownCloudVersion(
+        userId,
+        'reminder',
+        linkedReminderToUpdate.id,
+        result.tsIso,
+        result.remVersion
+      );
     }
-    recordCloudSyncOperation({
+
+    return {
+      ...record,
       userId,
-      status: 'success',
-      operation: 'upsert_service_record',
-      entity: 'serviceRecord',
-      targetId: record.id,
-      detail: `${record.title} (₱${record.totalCostPhp.toLocaleString()})`,
-    });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId,
-      status: 'failed',
-      operation: 'upsert_service_record',
-      entity: 'serviceRecord',
-      targetId: record.id,
-      detail: record.title,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
+      cloudVersion: result.recVersion,
+      updatedAt: result.tsIso,
+      timestampSource: 'server',
+    };
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (msg.includes('CONCURRENCY_CONFLICT') || msg.includes('PERMISSION_DENIED')) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.WRITE, `serviceRecords/${record.id}`);
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
+/**
+ * Transactional Batch Helper for Service Records:
+ * Splits writes into `SAFE_BATCH_TRANSACTION_CHUNK_SIZE` (8) chunks, performs all reads before writes,
+ * verifies parent motorcycle ownership if the parent exists, and protects newer cloud revisions.
+ */
 export async function saveServiceRecordsBatchToFirestore(
   records: ServiceRecord[],
   userId: string,
   options?:
+    | Record<string, ConcurrencyCheckOptions | any>
     | {
-        concurrencyById?: Record<string, WriteConcurrencyOptions>;
-        defaultConcurrency?: WriteConcurrencyOptions;
         onChunkCommitted?: (committedIds: string[]) => void;
+        concurrencyMap?: Record<string, ConcurrencyCheckOptions>;
       }
-    | Record<string, WriteConcurrencyOptions>
 ): Promise<void> {
-  if (!userId || records.length === 0) return;
-  const validRecords = records.filter(
-    (r) => r && r.id && !CONFIRMED_SAMPLE_SERVICE_RECORD_IDS.has(r.id)
-  );
-  if (validRecords.length === 0) return;
+  if (!records || records.length === 0) return;
 
-  // Conservative chunk size of 8 guarantees <= 16 Security Rules document-access calls per transaction (limit: 20)
-  const CHUNK_SIZE = SAFE_BATCH_TRANSACTION_CHUNK_SIZE;
-  const nowTs = nextMonotonicTimestamp();
-  const nowIso = nowTs.toDate().toISOString();
+  const onChunkCommitted =
+    typeof (options as any)?.onChunkCommitted === 'function'
+      ? ((options as any).onChunkCommitted as (ids: string[]) => void)
+      : undefined;
+  const concurrencyMap: Record<string, ConcurrencyCheckOptions> =
+    (options as any)?.concurrencyMap || (options as Record<string, ConcurrencyCheckOptions>) || {};
 
-  const isStructuredOptions =
-    Boolean(options) &&
-    ('concurrencyById' in (options as object) ||
-      'defaultConcurrency' in (options as object) ||
-      'onChunkCommitted' in (options as object));
+  for (let i = 0; i < records.length; i += SAFE_BATCH_TRANSACTION_CHUNK_SIZE) {
+    const chunk = records.slice(i, i + SAFE_BATCH_TRANSACTION_CHUNK_SIZE);
 
-  const resolveItemConcurrency = (recId: string): WriteConcurrencyOptions | undefined => {
-    if (!options) return undefined;
-    if (isStructuredOptions) {
-      const structured = options as {
-        concurrencyById?: Record<string, WriteConcurrencyOptions>;
-        defaultConcurrency?: WriteConcurrencyOptions;
-      };
-      return structured.concurrencyById?.[recId] ?? structured.defaultConcurrency;
-    }
-    return (options as Record<string, WriteConcurrencyOptions>)[recId];
-  };
+    const committedChunkMeta = await runTransaction(db, async (transaction) => {
+      // 1. ALL READS FIRST: read distinct parent motorcycles and target serviceRecord documents
+      const distinctBikeIds = Array.from(
+        new Set(chunk.map((r) => r.bikeId).filter((id): id is string => Boolean(id)))
+      );
+      const bikeSnaps = new Map<string, any>();
+      for (const bikeId of distinctBikeIds) {
+        const bSnap = await transaction.get(doc(db, 'motorcycles', bikeId));
+        bikeSnaps.set(bikeId, bSnap);
+      }
 
-  const onChunkCommitted = isStructuredOptions
-    ? (options as { onChunkCommitted?: (committedIds: string[]) => void }).onChunkCommitted
-    : undefined;
+      const recSnaps = new Map<string, any>();
+      for (const rec of chunk) {
+        const rSnap = await transaction.get(doc(db, 'serviceRecords', rec.id));
+        recSnaps.set(rec.id, rSnap);
+      }
 
-  try {
-    for (let i = 0; i < validRecords.length; i += CHUNK_SIZE) {
-      const chunk = validRecords.slice(i, i + CHUNK_SIZE);
-      const committedVersions = new Map<string, number>();
-
-      await runTransaction(db, async (transaction) => {
-        const refs = chunk.map((rec) => doc(db, 'serviceRecords', rec.id));
-        const distinctBikeIds = Array.from(
-          new Set(chunk.map((rec) => rec.bikeId).filter((id): id is string => Boolean(id)))
-        );
-        const bikeRefs = distinctBikeIds.map((bId) => doc(db, 'motorcycles', bId));
-
-        // Read all serviceRecord docs and parent motorcycle docs BEFORE performing any writes
-        const [snaps, bikeSnaps] = await Promise.all([
-          Promise.all(refs.map((ref) => transaction.get(ref))),
-          Promise.all(bikeRefs.map((bRef) => transaction.get(bRef))),
-        ]);
-
-        const bikeStatusById = new Map<string, { exists: boolean; ownerId: string | null }>();
-        for (let bIdx = 0; bIdx < distinctBikeIds.length; bIdx++) {
-          const bSnap = bikeSnaps[bIdx];
-          bikeStatusById.set(distinctBikeIds[bIdx], {
-            exists: bSnap.exists(),
-            ownerId: bSnap.exists() ? (bSnap.data()?.userId ?? null) : null,
-          });
-        }
-
-        for (let idx = 0; idx < chunk.length; idx++) {
-          const rec = chunk[idx];
-          const ref = refs[idx];
-          const existing = snaps[idx];
-          const cleanPayload = sanitizeFirestorePayload(rec);
-          const itemConcurrency = resolveItemConcurrency(rec.id);
-
-          // Verify parent motorcycle ownership if the motorcycle exists (retired/deleted motorcycles remain allowed for the owner)
-          const bikeStatus = bikeStatusById.get(rec.bikeId);
-          if (bikeStatus?.exists && bikeStatus.ownerId !== userId) {
+      // 2. VALIDATE & STAGE WRITES
+      const committed: Array<{ id: string; version: number; tsIso: string }> = [];
+      for (const rec of chunk) {
+        if (rec.bikeId) {
+          const parentSnap = bikeSnaps.get(rec.bikeId);
+          // Service records for retired motorcycles are allowed if parent no longer exists,
+          // but if the parent motorcycle DOES exist and belongs to another user, reject!
+          if (parentSnap && parentSnap.exists() && parentSnap.data()?.userId !== userId) {
             throw new Error(
               `PERMISSION_DENIED: Service record (${rec.id}) references a motorcycle (${rec.bikeId}) owned by another user.`
             );
           }
-
-          if (existing.exists()) {
-            const existingData = existing.data() || {};
-            if (existingData.userId && existingData.userId !== userId) {
-              throw new Error('PERMISSION_DENIED: Cannot modify a service record owned by another user.');
-            }
-            if (itemConcurrency?.enforceVersionCheck) {
-              assertTransactionVersionMatches({
-                entity: 'serviceRecord',
-                targetId: rec.id,
-                action: 'upsert',
-                existingData,
-                concurrency: itemConcurrency,
-              });
-            } else {
-              // Service records in batch migration are append-mostly; never overwrite an existing cloud record with a higher revision or newer/equal timestamp
-              const cloudRev =
-                typeof existingData.cloudVersion === 'number' ? existingData.cloudVersion : null;
-              const localRev =
-                typeof rec.cloudVersion === 'number' ? rec.cloudVersion : null;
-              const cloudMs =
-                parseTimestampToMillis(existingData.updatedAt) ??
-                parseTimestampToMillis(existingData.createdAt);
-              const localMs =
-                parseTimestampToMillis(rec.updatedAt) ??
-                parseTimestampToMillis(rec.createdAt);
-              if (
-                (cloudRev !== null && localRev !== null && cloudRev > localRev) ||
-                (cloudMs !== null && (localMs === null || cloudMs >= localMs))
-              ) {
-                continue;
-              }
-            }
-            const nextVersion = resolveNextCloudVersionForUpdate(
-              existingData,
-              'serviceRecord',
-              rec.id
-            );
-            committedVersions.set(rec.id, nextVersion);
-            transaction.update(ref, {
-              ...cleanPayload,
-              id: rec.id,
-              userId,
-              updatedAt: nowTs,
-              cloudVersion: nextVersion,
-            });
-          } else {
-            if (itemConcurrency?.enforceVersionCheck && itemConcurrency.baseVersionUntrusted) {
-              throw createConcurrencyConflictError({
-                entity: 'serviceRecord',
-                targetId: rec.id,
-                action: 'upsert',
-                baseCloudUpdatedAt: null,
-                currentCloudUpdatedAt: null,
-                baseCloudVersion: null,
-                currentCloudVersion: null,
-                reason: `Legacy batch service record mutation (${rec.id}) is missing a trustworthy base version.`,
-              });
-            }
-            committedVersions.set(rec.id, 1);
-            transaction.set(ref, {
-              ...cleanPayload,
-              id: rec.id,
-              userId,
-              createdAt: nowTs,
-              updatedAt: nowTs,
-              cloudVersion: 1,
-            });
-          }
         }
-      });
 
-      for (const [recId, ver] of committedVersions.entries()) {
-        recordKnownCloudVersion(userId, 'serviceRecord', recId, nowIso, ver);
+        const rSnap = recSnaps.get(rec.id);
+        const itemOpts = concurrencyMap[rec.id];
+        if (itemOpts && typeof itemOpts === 'object' && 'enforceVersionCheck' in itemOpts) {
+          verifyTransactionConcurrency({
+            entity: 'serviceRecord',
+            targetId: rec.id,
+            snapExists: rSnap.exists(),
+            cloudData: rSnap.data(),
+            opts: itemOpts,
+          });
+        }
+
+        const tsNow = serverTimestamp();
+        const tsIso = normalizeFirestoreTimestampToIso(tsNow) || new Date().toISOString();
+
+        const sanitizedParts = Array.isArray(rec.parts)
+          ? rec.parts.slice(0, 50).map((p) => ({
+              name: String(p.name || '').slice(0, 200),
+              costPhp: Number(p.costPhp) || 0,
+            }))
+          : [];
+
+        if (rSnap.exists()) {
+          const existingData = rSnap.data() || {};
+          if (existingData.userId && existingData.userId !== userId) {
+            throw new Error(
+              `PERMISSION_DENIED: Cannot modify service record (${rec.id}) owned by another user.`
+            );
+          }
+
+          const cloudVer =
+            typeof existingData.cloudVersion === 'number' ? existingData.cloudVersion : null;
+          const localVer = typeof rec.cloudVersion === 'number' ? rec.cloudVersion : null;
+          if (cloudVer !== null && localVer !== null && localVer < cloudVer) {
+            continue;
+          }
+          const cloudMs = parseTimestampToMillis(existingData.updatedAt);
+          const localMs = parseTimestampToMillis(rec.updatedAt);
+          if (cloudMs !== null && localMs !== null && localMs < cloudMs && cloudVer !== null) {
+            continue;
+          }
+
+          const nextVersion = resolveNextCloudVersionForUpdate(
+            existingData,
+            'serviceRecord',
+            rec.id
+          );
+          const payload = stripUndefined({
+            ...rec,
+            parts: sanitizedParts,
+            userId,
+            cloudVersion: nextVersion,
+            updatedAt: tsNow,
+            timestampSource: 'server',
+          });
+          if (typeof payload.photoUrl === 'string' && payload.photoUrl.length > 2000) {
+            payload.photoUrl = payload.photoUrl.slice(0, 2000);
+          }
+          transaction.set(doc(db, 'serviceRecords', rec.id), payload, { merge: true });
+          committed.push({ id: rec.id, version: nextVersion, tsIso });
+        } else {
+          const payload = stripUndefined({
+            ...rec,
+            parts: sanitizedParts,
+            userId,
+            cloudVersion: 1,
+            createdAt: tsNow,
+            updatedAt: tsNow,
+            timestampSource: 'server',
+          });
+          if (typeof payload.photoUrl === 'string' && payload.photoUrl.length > 2000) {
+            payload.photoUrl = payload.photoUrl.slice(0, 2000);
+          }
+          transaction.set(doc(db, 'serviceRecords', rec.id), payload);
+          committed.push({ id: rec.id, version: 1, tsIso });
+        }
       }
-      onChunkCommitted?.(chunk.map((r) => r.id));
-    }
-    recordCloudSyncOperation({
-      userId,
-      status: 'success',
-      operation: 'batch_upsert_service_records',
-      entity: 'serviceRecord',
-      detail: `${validRecords.length} service record(s) synced`,
+
+      return committed;
     });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId,
-      status: 'failed',
-      operation: 'batch_upsert_service_records',
-      entity: 'serviceRecord',
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
-      throw error;
+
+    for (const meta of committedChunkMeta) {
+      recordKnownCloudVersion(userId, 'serviceRecord', meta.id, meta.tsIso, meta.version);
     }
-    handleFirestoreError(error, OperationType.WRITE, 'serviceRecords/batch');
+    if (onChunkCommitted) {
+      onChunkCommitted(chunk.map((r) => r.id));
+    }
   }
 }
 
+/**
+ * Deletes a Service Record document from Firestore
+ */
 export async function deleteServiceRecordFromFirestore(
   recordId: string,
   userId?: string,
-  concurrency?: WriteConcurrencyOptions
+  concurrencyOpts?: ConcurrencyCheckOptions
 ): Promise<void> {
-  const currentUserId = userId || auth.currentUser?.uid;
-  if (!currentUserId || !recordId) return;
-  const recDocRef = doc(db, 'serviceRecords', recordId);
+  const path = `serviceRecords/${recordId}`;
   try {
-    await runTransaction(db, async (transaction) => {
-      const existing = await transaction.get(recDocRef);
-      if (existing.exists()) {
-        const existingData = existing.data() || {};
-        if (existingData.userId && existingData.userId !== currentUserId) {
-          throw new Error('PERMISSION_DENIED: Cannot delete a service record owned by another user.');
+    const recRef = doc(db, 'serviceRecords', recordId);
+    if (concurrencyOpts?.enforceVersionCheck) {
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(recRef);
+        verifyTransactionConcurrency({
+          entity: 'serviceRecord',
+          targetId: recordId,
+          snapExists: snap.exists(),
+          cloudData: snap.data(),
+          opts: concurrencyOpts,
+        });
+        if (snap.exists()) {
+          if (userId && snap.data()?.userId && snap.data()?.userId !== userId) {
+            throw new Error(
+              `PERMISSION_DENIED: Cannot delete service record (${recordId}) owned by another user.`
+            );
+          }
+          transaction.delete(recRef);
         }
-        if (concurrency?.enforceVersionCheck) {
-          assertTransactionVersionMatches({
-            entity: 'serviceRecord',
-            targetId: recordId,
-            action: 'delete',
-            existingData,
-            concurrency,
-          });
-        }
-        transaction.delete(recDocRef);
-      }
-    });
-    removeKnownCloudVersion(currentUserId, 'serviceRecord', recordId);
-    recordCloudSyncOperation({
-      userId: currentUserId,
-      status: 'success',
-      operation: 'delete_service_record',
-      entity: 'serviceRecord',
-      targetId: recordId,
-    });
-  } catch (error) {
-    recordCloudSyncOperation({
-      userId: currentUserId,
-      status: 'failed',
-      operation: 'delete_service_record',
-      entity: 'serviceRecord',
-      targetId: recordId,
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    if (
-      error instanceof Error &&
-      (error.message.includes('PERMISSION_DENIED') ||
-        error.message.includes('CONCURRENCY_CONFLICT'))
-    ) {
+      });
+    } else {
+      await deleteDoc(recRef);
+    }
+    if (userId) {
+      removeKnownCloudVersion(userId, 'serviceRecord', recordId);
+    }
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (msg.includes('CONCURRENCY_CONFLICT') || msg.includes('PERMISSION_DENIED')) {
       throw error;
     }
-    handleFirestoreError(error, OperationType.DELETE, `serviceRecords/${recordId}`);
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
-export async function fetchUserServiceRecordsOnce(userId: string): Promise<ServiceRecord[]> {
-  if (!userId) return [];
-  const path = 'serviceRecords';
-  try {
-    const q = query(collection(db, 'serviceRecords'), where('userId', '==', userId));
-    const snap = await getDocs(q);
-    const items: ServiceRecord[] = [];
-    snap.forEach((docSnap) => {
-      items.push(normalizeServiceRecordFromFirestore({ id: docSnap.id, ...docSnap.data() }));
-    });
-    return items;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, path);
+// ============================================================================
+// OFFLINE QUEUE FLUSH, QUARANTINE RECOVERY & DIRECT ONLINE WRITE HELPERS
+// ============================================================================
+
+const MAX_OFFLINE_MUTATION_RETRIES = 5;
+
+function hasTrustworthyBaseVersionMetadata(item: OfflineMutationItem): boolean {
+  if (item.baseVersionUntrusted) return false;
+  if (item.expectedCloudAbsent === true) return true;
+  if (typeof item.baseCloudVersion === 'number' && Number.isFinite(item.baseCloudVersion)) {
+    return true;
   }
+  if (typeof item.baseCloudUpdatedAt === 'string' && item.baseCloudUpdatedAt.length > 0) {
+    return true;
+  }
+  return false;
 }
-
-export function subscribeToUserServiceRecords(
-  userId: string,
-  callback: (records: ServiceRecord[]) => void,
-  onError?: (err: unknown) => void
-): () => void {
-  const path = 'serviceRecords';
-  const q = query(collection(db, 'serviceRecords'), where('userId', '==', userId));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const fromCache = Boolean((snapshot as any)?.metadata?.fromCache);
-      const items: ServiceRecord[] = [];
-      snapshot.forEach((docSnap) => {
-        const hasPending =
-          Boolean((docSnap as any)?.metadata?.hasPendingWrites) || fromCache;
-        items.push(
-          normalizeServiceRecordFromFirestore(
-            { id: docSnap.id, ...docSnap.data() },
-            hasPending
-          )
-        );
-      });
-      callback(items);
-    },
-    (error) => {
-      onError?.(error);
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Prevent uncaught listener throw
-      }
-    }
-  );
-}
-
-// ============================================================================
-// 13. Direct Online Concurrency Protection & Offline Queue Replay
-// ============================================================================
 
 /**
- * Resolves the authoritative cloud base version (`baseCloudUpdatedAt` and `baseCloudVersion`)
- * for an entity BEFORE local optimistic React state updates occur.
+ * Replays queued offline mutations for `userId` in FIFO order with atomic write-time
+ * concurrency verification and automatic quarantine on permanent/conflict/exhausted failures.
  */
-export function resolveEntityBaseCloudVersion(
-  userId: string | undefined,
-  entity: OfflineMutationEntity,
-  targetId: string,
-  existingRecord?: {
-    updatedAt?: string;
-    createdAt?: string;
-    cloudVersion?: number;
-    timestampSource?: string;
-  } | null
-): WriteConcurrencyOptions {
-  if (userId && targetId) {
-    // 1. If a pending mutation already exists in the active queue for (entity, targetId),
-    // preserve its original pre-edit baseCloudUpdatedAt and baseCloudVersion.
-    const pendingQueue = getOfflineMutationQueue(userId);
-    const existingPending = pendingQueue.find(
-      (q) => q.entity === entity && q.targetId === targetId
-    );
-    if (existingPending) {
-      const hasValidTs =
-        typeof existingPending.baseCloudUpdatedAt === 'string' &&
-        existingPending.baseCloudUpdatedAt.length > 0;
-      const hasValidRev = typeof existingPending.baseCloudVersion === 'number';
-      const isExpectedAbsent =
-        existingPending.expectedCloudAbsent === true && !hasValidTs && !hasValidRev;
-      return {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: hasValidTs ? existingPending.baseCloudUpdatedAt! : null,
-        baseCloudVersion: hasValidRev ? existingPending.baseCloudVersion! : null,
-        expectedCloudAbsent: isExpectedAbsent,
-        baseVersionUntrusted:
-          Boolean(existingPending.baseVersionUntrusted) ||
-          (!hasValidTs && !hasValidRev && !isExpectedAbsent),
-      };
-    }
-
-    // 2. If `existingRecord` carries a server-confirmed `cloudVersion` and `timestampSource !== 'client_pending'`,
-    // use the record's own version (captures the exact state the user was viewing/editing in the UI).
-    if (
-      existingRecord &&
-      existingRecord.timestampSource !== 'client_pending' &&
-      typeof existingRecord.cloudVersion === 'number' &&
-      (existingRecord.updatedAt || existingRecord.createdAt)
-    ) {
-      return {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: existingRecord.updatedAt || existingRecord.createdAt || null,
-        baseCloudVersion: existingRecord.cloudVersion,
-        expectedCloudAbsent: false,
-      };
-    }
-
-    // 3. Check UID-scoped cloud version registry
-    const knownIso = getKnownCloudVersion(userId, entity, targetId);
-    const knownRev = getKnownCloudRevision(userId, entity, targetId);
-    if (knownIso || knownRev !== null) {
-      return {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: knownIso,
-        baseCloudVersion: knownRev,
-        expectedCloudAbsent: false,
-      };
-    }
+export async function flushOfflineMutationQueue(userId: string): Promise<{
+  skippedOffline: boolean;
+  flushedCount: number;
+  failedCount: number;
+  quarantinedCount: number;
+}> {
+  if (!userId) {
+    return { skippedOffline: false, flushedCount: 0, failedCount: 0, quarantinedCount: 0 };
   }
 
-  // 4. Fallback to existingRecord if it existed locally before this edit
-  if (existingRecord) {
-    const candidateTs =
-      existingRecord.timestampSource !== 'client_pending'
-        ? existingRecord.updatedAt || existingRecord.createdAt || null
-        : null;
-    const candidateRev =
-      existingRecord.timestampSource !== 'client_pending' &&
-      typeof existingRecord.cloudVersion === 'number'
-        ? existingRecord.cloudVersion
-        : null;
-    return {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return { skippedOffline: true, flushedCount: 0, failedCount: 0, quarantinedCount: 0 };
+  }
+
+  const queue = getOfflineMutationQueue(userId);
+  if (queue.length === 0) {
+    return { skippedOffline: false, flushedCount: 0, failedCount: 0, quarantinedCount: 0 };
+  }
+
+  let flushedCount = 0;
+  let failedCount = 0;
+  let quarantinedCount = 0;
+  const remainingQueue: OfflineMutationItem[] = [];
+
+  for (const item of queue) {
+    // Check if legacy queued item lacks trustworthy base version metadata
+    if (!hasTrustworthyBaseVersionMetadata(item)) {
+      const untrustedItem: OfflineMutationItem = {
+        ...item,
+        baseVersionUntrusted: true,
+      };
+      quarantineOfflineMutation({
+        item: untrustedItem,
+        lastError:
+          'CONCURRENCY_CONFLICT: Queued mutation lacks trustworthy base cloud version metadata.',
+        retryCount: (item.retryCount || 0) + 1,
+        failureClassification: 'version_conflict',
+        conflictReason:
+          'Mutation was queued without a verified base cloud version and cannot safely overwrite existing cloud documents.',
+      });
+      quarantinedCount += 1;
+      failedCount += 1;
+      continue;
+    }
+
+    const concurrencyOpts: ConcurrencyCheckOptions = {
       enforceVersionCheck: true,
-      baseCloudUpdatedAt: candidateTs,
-      baseCloudVersion: candidateRev,
-      expectedCloudAbsent: false,
-      baseVersionUntrusted: candidateTs === null && candidateRev === null,
+      baseCloudUpdatedAt: item.baseCloudUpdatedAt,
+      baseCloudVersion: item.baseCloudVersion,
+      expectedCloudAbsent: item.expectedCloudAbsent,
+      baseVersionUntrusted: item.baseVersionUntrusted,
     };
+
+    try {
+      if (item.entity === 'motorcycle') {
+        if (item.action === 'upsert' && item.payload) {
+          await saveMotorcycleToFirestore(
+            { ...(item.payload as unknown as Motorcycle), id: item.targetId },
+            userId,
+            concurrencyOpts
+          );
+        } else if (item.action === 'update_fields' && item.payload) {
+          await updateMotorcycleFieldsInFirestore(
+            item.targetId,
+            userId,
+            item.payload as Partial<Motorcycle>,
+            concurrencyOpts
+          );
+        } else if (item.action === 'delete') {
+          await deleteMotorcycleFromFirestore(item.targetId, userId, concurrencyOpts);
+        }
+      } else if (item.entity === 'reminder') {
+        if ((item.action === 'upsert' || item.action === 'update_fields') && item.payload) {
+          await saveReminderToFirestore(
+            { ...(item.payload as unknown as MaintenanceReminder), id: item.targetId },
+            userId,
+            concurrencyOpts
+          );
+        } else if (item.action === 'delete') {
+          await deleteReminderFromFirestore(item.targetId, userId, concurrencyOpts);
+        }
+      } else if (item.entity === 'serviceRecord') {
+        if ((item.action === 'upsert' || item.action === 'update_fields') && item.payload) {
+          await saveServiceRecordToFirestore(
+            { ...(item.payload as unknown as ServiceRecord), id: item.targetId },
+            userId,
+            undefined,
+            concurrencyOpts
+          );
+        } else if (item.action === 'delete') {
+          await deleteServiceRecordFromFirestore(item.targetId, userId, concurrencyOpts);
+        }
+      }
+
+      flushedCount += 1;
+    } catch (err: any) {
+      failedCount += 1;
+      const errMsg = String(err?.message || err || 'Unknown Firestore error');
+      const nextRetryCount = (item.retryCount || 0) + 1;
+      const classification = classifyMutationFailure(
+        errMsg,
+        nextRetryCount,
+        MAX_OFFLINE_MUTATION_RETRIES,
+        typeof navigator !== 'undefined' && navigator.onLine === false
+      );
+
+      recordCloudSyncOperation({
+        userId,
+        status: 'failed',
+        operation: `${item.action}_${item.entity}`,
+        entity: item.entity,
+        targetId: item.targetId,
+        errorMessage: errMsg,
+      });
+
+      if (
+        classification === 'version_conflict' ||
+        classification === 'quota_exceeded' ||
+        classification === 'permission_or_validation_error' ||
+        classification === 'retry_exhausted'
+      ) {
+        quarantineOfflineMutation({
+          item,
+          lastError: errMsg,
+          retryCount: nextRetryCount,
+          failureClassification: classification,
+          conflictCloudUpdatedAt: err?.conflictCloudUpdatedAt,
+          conflictCloudVersion: err?.conflictCloudVersion,
+          conflictReason: err?.conflictReason || errMsg,
+        });
+        quarantinedCount += 1;
+      } else {
+        remainingQueue.push({
+          ...item,
+          retryCount: nextRetryCount,
+          lastError: errMsg,
+        });
+      }
+    }
   }
 
-  // 5. Brand-new entity not yet present in local state or cloud
+  saveOfflineMutationQueue(userId, remainingQueue);
   return {
-    enforceVersionCheck: true,
-    baseCloudUpdatedAt: null,
-    baseCloudVersion: null,
-    expectedCloudAbsent: true,
+    skippedOffline: false,
+    flushedCount,
+    failedCount,
+    quarantinedCount,
   };
 }
 
 /**
- * Removes a queued mutation ONLY after its version-checked direct online write succeeds,
- * and ONLY if no newer edit was coalesced into the queue item while the write was in flight.
- * Refuses to remove any queued mutation if `concurrency.enforceVersionCheck` was not true.
+ * Safely inspects and recovers a quarantined mutation for `userId`.
+ * Verifies UID isolation and trustworthy base version metadata before requeuing.
+ */
+export async function recoverQuarantinedMutationSafely(
+  userId: string,
+  mutationId: string
+): Promise<{
+  status: 'requeued' | 'version_conflict' | 'missing_base_version' | 'not_found';
+  message?: string;
+}> {
+  if (!userId || !mutationId) {
+    return { status: 'not_found' };
+  }
+  const list = getQuarantinedMutationQueue(userId);
+  const found = list.find((q) => q.id === mutationId && q.userId === userId);
+  if (!found) {
+    return { status: 'not_found' };
+  }
+
+  if (
+    found.baseVersionUntrusted ||
+    (found.expectedCloudAbsent !== true &&
+      typeof found.baseCloudVersion !== 'number' &&
+      (!found.baseCloudUpdatedAt || found.baseCloudUpdatedAt.length === 0))
+  ) {
+    return {
+      status: 'missing_base_version',
+      message: 'Mutation lacks a trustworthy base cloud version and cannot be auto-requeued.',
+    };
+  }
+
+  const requeued = requeueQuarantinedMutation(userId, mutationId);
+  if (!requeued) {
+    return { status: 'missing_base_version' };
+  }
+  return { status: 'requeued' };
+}
+
+/**
+ * Removes a completed direct-online mutation from the active queue ONLY IF:
+ * 1) `enforceVersionCheck === true` was used for the write, AND
+ * 2) the queued item's `mutationGeneration` still matches `expectedGeneration`
+ *    (preventing an older in-flight write from deleting a newer rapid edit).
  */
 export function completeDirectOnlineMutation(params: {
   userId: string;
   mutationId: string;
   expectedGeneration: number;
-  entity?: OfflineMutationEntity;
-  targetId?: string;
-  concurrency?: WriteConcurrencyOptions;
-  enforceVersionCheck?: boolean;
+  enforceVersionCheck: boolean;
 }): boolean {
-  const {
-    userId,
-    mutationId,
-    expectedGeneration,
-    entity,
-    targetId,
-    concurrency,
-    enforceVersionCheck,
-  } = params;
-  if (!userId || !mutationId) return false;
-
-  const isVersionChecked =
-    enforceVersionCheck !== undefined
-      ? enforceVersionCheck === true
-      : Boolean(concurrency && concurrency.enforceVersionCheck === true);
-
-  // Never remove a queued mutation merely because an unprotected write succeeded
-  if (!isVersionChecked) {
+  const { userId, mutationId, expectedGeneration, enforceVersionCheck } = params;
+  if (!userId || !mutationId || !enforceVersionCheck) {
     return false;
   }
-
   const queue = getOfflineMutationQueue(userId);
-  const idx = queue.findIndex((q) => q.id === mutationId);
-  if (idx < 0) return false;
+  const target = queue.find((q) => q.id === mutationId && q.userId === userId);
+  if (!target) return false;
 
-  const currentItem = queue[idx];
-  const currentGeneration = currentItem.mutationGeneration ?? 1;
-
-  if (currentGeneration !== expectedGeneration) {
-    // A newer edit coalesced into this queue item while the earlier write was in flight!
-    // Do NOT remove the newer queued mutation. Advance its base version to the version
-    // just committed by this device if it was still referencing the pre-write base version.
-    const resolvedEntity = entity || currentItem.entity;
-    const resolvedTargetId = targetId || currentItem.targetId;
-    const latestIso = getKnownCloudVersion(userId, resolvedEntity, resolvedTargetId);
-    const latestRev = getKnownCloudRevision(userId, resolvedEntity, resolvedTargetId);
-    if (
-      latestIso &&
-      concurrency &&
-      (currentItem.baseCloudUpdatedAt === concurrency.baseCloudUpdatedAt ||
-        (concurrency.expectedCloudAbsent && currentItem.expectedCloudAbsent))
-    ) {
-      queue[idx] = {
-        ...currentItem,
-        baseCloudUpdatedAt: latestIso,
-        ...(latestRev !== null ? { baseCloudVersion: latestRev } : {}),
-        expectedCloudAbsent: false,
-      };
-      saveOfflineMutationQueue(userId, queue);
-    }
+  const currentGen = target.mutationGeneration ?? 1;
+  if (currentGen !== expectedGeneration) {
     return false;
   }
 
-  queue.splice(idx, 1);
-  saveOfflineMutationQueue(userId, queue);
+  removeOfflineMutation(userId, mutationId);
   return true;
 }
 
 /**
- * Handles errors from a direct online write:
- * - On `CONCURRENCY_CONFLICT`: preserves the complete mutation payload and base/conflict
- *   version details in `motocare_quarantined_queue_v1_${userId}` (`version_conflict`) and
- *   removes the conflicted generation from the active retry queue so it is surfaced for
- *   review rather than silently retried as a temporary network error.
- * - On temporary network / offline error: keeps the queued mutation intact in the active queue.
- */
-export function handleDirectOnlineMutationError(
-  err: unknown,
-  params: {
-    userId: string;
-    mutationId: string;
-    expectedGeneration: number;
-    fallbackItem: OfflineMutationItem;
-  }
-): {
-  classification: MutationFailureClassification;
-  quarantinedItem: QuarantinedMutationItem | null;
-  conflictDetails?: ConcurrencyConflictDetails;
-} {
-  const { userId, mutationId, expectedGeneration, fallbackItem } = params;
-  const errMsg = err instanceof Error ? err.message : String(err);
-  const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
-  const classification = classifyMutationFailure(errMsg, 1, 5, isOffline);
-  const conflictDetails: ConcurrencyConflictDetails | undefined = (err as any)?.conflictDetails;
-
-  if (
-    classification === 'version_conflict' ||
-    classification === 'permission_or_validation_error' ||
-    classification === 'quota_exceeded'
-  ) {
-    const queue = getOfflineMutationQueue(userId);
-    const idx = queue.findIndex((q) => q.id === mutationId);
-    const targetItem = idx >= 0 ? queue[idx] : fallbackItem;
-
-    const quarantinedItem = quarantineOfflineMutation({
-      item: targetItem,
-      lastError: errMsg,
-      retryCount: (targetItem.retryCount || 0) + 1,
-      failureClassification: classification,
-      conflictCloudUpdatedAt: conflictDetails?.currentCloudUpdatedAt ?? undefined,
-      conflictCloudVersion: conflictDetails?.currentCloudVersion ?? undefined,
-      conflictReason: conflictDetails?.reason ?? undefined,
-    });
-
-    if (idx >= 0 && (queue[idx].mutationGeneration ?? 1) === expectedGeneration) {
-      queue.splice(idx, 1);
-      saveOfflineMutationQueue(userId, queue);
-    }
-
-    return { classification, quarantinedItem, conflictDetails };
-  }
-
-  return { classification, quarantinedItem: null };
-}
-
-/**
- * Schedules a 600ms debounced direct online odometer update while immediately persisting
- * the mutation and its pre-edit base cloud version in `motocare_offline_queue_v1_${userId}`.
- * Enforces the version check inside the Firestore transaction when the debounce timer fires,
- * and prevents debounce cancellation or rapid repeated edits from removing a newer mutation.
- */
-export function scheduleDirectOnlineOdometerUpdate(params: {
-  userId: string;
-  bikeId?: string;
-  targetBikeId?: string;
-  newOdometer?: number;
-  newOdo?: number;
-  preEditBike?: Motorcycle | null;
-  timerRef?: { current: ReturnType<typeof setTimeout> | null };
-  debounceTimerRef?: { current: ReturnType<typeof setTimeout> | null };
-  delayMs?: number;
-  createdAtIso?: string;
-  onStatusChange?: (status: 'syncing' | 'synced' | 'offline_cache' | 'sync_error') => void;
-  onVersionConflict?: (details: {
-    quarantinedItem: QuarantinedMutationItem | null;
-    conflictDetails?: ConcurrencyConflictDetails;
-  }) => void;
-}): {
-  queuedItem: OfflineMutationItem;
-  concurrency: WriteConcurrencyOptions;
-} {
-  const {
-    userId,
-    preEditBike,
-    delayMs = 600,
-    createdAtIso = new Date().toISOString(),
-    onStatusChange,
-    onVersionConflict,
-  } = params;
-  const resolvedBikeId = (params.bikeId || params.targetBikeId || '').trim();
-  const resolvedOdo =
-    typeof params.newOdometer === 'number' ? params.newOdometer : (params.newOdo ?? 0);
-  const resolvedTimerRef = params.timerRef || params.debounceTimerRef || { current: null };
-
-  const baseVersion = resolveEntityBaseCloudVersion(
-    userId,
-    'motorcycle',
-    resolvedBikeId,
-    preEditBike
-  );
-
-  const queuedItem = enqueueOfflineMutation({
-    userId,
-    entity: 'motorcycle',
-    action: 'update_fields',
-    targetId: resolvedBikeId,
-    payload: { odometer: resolvedOdo },
-    createdAtIso,
-    baseCloudUpdatedAt: baseVersion.baseCloudUpdatedAt,
-    baseCloudVersion: baseVersion.baseCloudVersion,
-    expectedCloudAbsent: baseVersion.expectedCloudAbsent,
-    baseVersionUntrusted: baseVersion.baseVersionUntrusted,
-  });
-
-  const scheduledMutationId = queuedItem.id;
-  const scheduledGeneration = queuedItem.mutationGeneration ?? 1;
-  const scheduledConcurrency: WriteConcurrencyOptions = {
-    enforceVersionCheck: true,
-    baseCloudUpdatedAt: queuedItem.baseCloudUpdatedAt ?? null,
-    baseCloudVersion: queuedItem.baseCloudVersion ?? null,
-    expectedCloudAbsent: Boolean(queuedItem.expectedCloudAbsent),
-    baseVersionUntrusted: Boolean(queuedItem.baseVersionUntrusted),
-  };
-
-  onStatusChange?.('syncing');
-
-  if (resolvedTimerRef.current) {
-    clearTimeout(resolvedTimerRef.current);
-    resolvedTimerRef.current = null;
-  }
-
-  resolvedTimerRef.current = setTimeout(async () => {
-    resolvedTimerRef.current = null;
-    try {
-      await updateMotorcycleFieldsInFirestore(
-        resolvedBikeId,
-        userId,
-        { odometer: resolvedOdo },
-        scheduledConcurrency
-      );
-      completeDirectOnlineMutation({
-        userId,
-        mutationId: scheduledMutationId,
-        expectedGeneration: scheduledGeneration,
-        entity: 'motorcycle',
-        targetId: resolvedBikeId,
-        concurrency: scheduledConcurrency,
-      });
-      onStatusChange?.('synced');
-    } catch (err) {
-      const handled = handleDirectOnlineMutationError(err, {
-        userId,
-        mutationId: scheduledMutationId,
-        expectedGeneration: scheduledGeneration,
-        fallbackItem: queuedItem,
-      });
-      if (handled.classification === 'version_conflict') {
-        onStatusChange?.('sync_error');
-        onVersionConflict?.({
-          quarantinedItem: handled.quarantinedItem,
-          conflictDetails: handled.conflictDetails,
-        });
-      } else {
-        onStatusChange?.('offline_cache');
-      }
-    }
-  }, delayMs);
-
-  return { queuedItem, concurrency: scheduledConcurrency };
-}
-
-/**
- * Executes an immediate version-checked direct online write (upsert, update_fields, or delete)
- * for motorcycles, reminders, or service records.
- * - Captures the original cloud base version before writing.
- * - Persists the mutation in `motocare_offline_queue_v1_${userId}` prior to the network call.
- * - Enforces `assertTransactionVersionMatches` inside the Firestore transaction.
- * - Removes only the corresponding mutation generation on version-checked completion.
- * - Quarantines and surfaces version conflicts without retrying them as temporary network errors.
+ * Executes a direct online write with durable queue protection and atomic `cloudVersion` / timestamp
+ * concurrency checking.
  */
 export async function executeDirectOnlineWrite(params: {
   userId: string;
-  entity: OfflineMutationEntity;
-  action: OfflineMutationAction;
+  entity: 'motorcycle' | 'reminder' | 'serviceRecord';
+  action: 'upsert' | 'update_fields' | 'delete';
   targetId: string;
   payload?: Record<string, unknown>;
-  preEditRecord?: {
-    updatedAt?: string;
-    createdAt?: string;
-    cloudVersion?: number;
-    timestampSource?: string;
-  } | null;
-  createdAtIso?: string;
-  linkedReminderUpdate?: {
-    reminder: MaintenanceReminder;
-    preEditReminder?: MaintenanceReminder | null;
-  };
-  oemRemindersToCreate?: MaintenanceReminder[];
-  deleteOptions?: {
-    deleteReminders?: boolean;
-    deleteServiceHistoryConfirmed?: boolean;
-  };
+  preEditRecord?: Motorcycle | MaintenanceReminder | ServiceRecord | null;
+  linkedReminderToUpdate?: MaintenanceReminder;
 }): Promise<{
-  status: 'synced' | 'version_conflict' | 'quota_or_permission_error' | 'offline_queued';
-  queuedItem: OfflineMutationItem;
-  concurrency: WriteConcurrencyOptions;
-  quarantinedItem?: QuarantinedMutationItem | null;
-  conflictDetails?: ConcurrencyConflictDetails;
-  error?: unknown;
+  status: 'synced' | 'queued_offline' | 'version_conflict' | 'error';
+  errorMessage?: string;
 }> {
   const {
     userId,
@@ -2942,536 +1606,250 @@ export async function executeDirectOnlineWrite(params: {
     targetId,
     payload,
     preEditRecord,
-    createdAtIso = new Date().toISOString(),
-    linkedReminderUpdate,
-    oemRemindersToCreate,
-    deleteOptions,
+    linkedReminderToUpdate,
   } = params;
 
-  const baseVersion = resolveEntityBaseCloudVersion(userId, entity, targetId, preEditRecord);
+  const baseCloudUpdatedAt =
+    preEditRecord?.updatedAt && preEditRecord.timestampSource !== 'client_pending'
+      ? preEditRecord.updatedAt
+      : getKnownCloudVersion(userId, entity, targetId);
+  const baseCloudVersion =
+    typeof preEditRecord?.cloudVersion === 'number'
+      ? preEditRecord.cloudVersion
+      : getKnownCloudRevision(userId, entity, targetId);
+  const expectedCloudAbsent =
+    !preEditRecord && baseCloudUpdatedAt === null && baseCloudVersion === null && action === 'upsert';
 
+  // 1. Enqueue into durable local queue first (coalescing rapid edits while preserving original base version)
   const queuedItem = enqueueOfflineMutation({
     userId,
     entity,
     action,
     targetId,
-    payload:
-      payload ??
-      (action === 'delete' && preEditRecord
-        ? (preEditRecord as unknown as Record<string, unknown>)
-        : { id: targetId }),
-    createdAtIso,
-    baseCloudUpdatedAt: baseVersion.baseCloudUpdatedAt,
-    baseCloudVersion: baseVersion.baseCloudVersion,
-    expectedCloudAbsent: baseVersion.expectedCloudAbsent,
-    baseVersionUntrusted: baseVersion.baseVersionUntrusted,
+    payload,
+    baseCloudUpdatedAt,
+    baseCloudVersion,
+    expectedCloudAbsent,
   });
 
-  const expectedGeneration = queuedItem.mutationGeneration ?? 1;
-  const concurrency: WriteConcurrencyOptions = {
-    enforceVersionCheck: true,
-    baseCloudUpdatedAt: queuedItem.baseCloudUpdatedAt ?? null,
-    baseCloudVersion: queuedItem.baseCloudVersion ?? null,
-    expectedCloudAbsent: Boolean(queuedItem.expectedCloudAbsent),
-    baseVersionUntrusted: Boolean(queuedItem.baseVersionUntrusted),
-  };
-
-  let linkedRemQueuedItem: OfflineMutationItem | null = null;
-  let linkedRemExpectedGeneration = 1;
-  let linkedRemConcurrency: WriteConcurrencyOptions | undefined;
-
-  if (linkedReminderUpdate?.reminder) {
-    const remBase = resolveEntityBaseCloudVersion(
-      userId,
-      'reminder',
-      linkedReminderUpdate.reminder.id,
-      linkedReminderUpdate.preEditReminder
-    );
-    linkedRemQueuedItem = enqueueOfflineMutation({
-      userId,
-      entity: 'reminder',
-      action: 'upsert',
-      targetId: linkedReminderUpdate.reminder.id,
-      payload: linkedReminderUpdate.reminder as unknown as Record<string, unknown>,
-      createdAtIso,
-      baseCloudUpdatedAt: remBase.baseCloudUpdatedAt,
-      baseCloudVersion: remBase.baseCloudVersion,
-      expectedCloudAbsent: remBase.expectedCloudAbsent,
-      baseVersionUntrusted: remBase.baseVersionUntrusted,
-    });
-    linkedRemExpectedGeneration = linkedRemQueuedItem.mutationGeneration ?? 1;
-    linkedRemConcurrency = {
-      enforceVersionCheck: true,
-      baseCloudUpdatedAt: linkedRemQueuedItem.baseCloudUpdatedAt ?? null,
-      baseCloudVersion: linkedRemQueuedItem.baseCloudVersion ?? null,
-      expectedCloudAbsent: Boolean(linkedRemQueuedItem.expectedCloudAbsent),
-      baseVersionUntrusted: Boolean(linkedRemQueuedItem.baseVersionUntrusted),
-    };
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return { status: 'queued_offline' };
   }
+
+  const concurrencyOpts: ConcurrencyCheckOptions = {
+    enforceVersionCheck: true,
+    baseCloudUpdatedAt: queuedItem.baseCloudUpdatedAt,
+    baseCloudVersion: queuedItem.baseCloudVersion,
+    expectedCloudAbsent: queuedItem.expectedCloudAbsent,
+    baseVersionUntrusted: queuedItem.baseVersionUntrusted,
+  };
 
   try {
     if (entity === 'motorcycle') {
       if (action === 'upsert' && payload) {
-        await saveMotorcycleToFirestore(payload as unknown as Motorcycle, userId, concurrency);
-        if (oemRemindersToCreate && oemRemindersToCreate.length > 0) {
-          await saveRemindersBatchToFirestore(oemRemindersToCreate, userId, {
-            defaultConcurrency: {
-              enforceVersionCheck: true,
-              baseCloudUpdatedAt: null,
-              baseCloudVersion: null,
-              expectedCloudAbsent: true,
-            },
-          });
-        }
+        await saveMotorcycleToFirestore(
+          { ...(payload as unknown as Motorcycle), id: targetId },
+          userId,
+          concurrencyOpts
+        );
       } else if (action === 'update_fields' && payload) {
-        await updateMotorcycleFieldsInFirestore(targetId, userId, payload as any, concurrency);
+        await updateMotorcycleFieldsInFirestore(
+          targetId,
+          userId,
+          payload as Partial<Motorcycle>,
+          concurrencyOpts
+        );
       } else if (action === 'delete') {
-        await deleteMotorcycleFromFirestore(targetId, userId, {
-          deleteReminders: deleteOptions?.deleteReminders ?? true,
-          deleteServiceHistoryConfirmed: deleteOptions?.deleteServiceHistoryConfirmed ?? false,
-          concurrency,
-        });
+        await deleteMotorcycleFromFirestore(targetId, userId, concurrencyOpts);
       }
     } else if (entity === 'reminder') {
-      if (action === 'upsert' && payload) {
+      if ((action === 'upsert' || action === 'update_fields') && payload) {
         await saveReminderToFirestore(
-          payload as unknown as MaintenanceReminder,
+          { ...(payload as unknown as MaintenanceReminder), id: targetId },
           userId,
-          concurrency
+          concurrencyOpts
         );
       } else if (action === 'delete') {
-        await deleteReminderFromFirestore(targetId, userId, concurrency);
+        await deleteReminderFromFirestore(targetId, userId, concurrencyOpts);
       }
     } else if (entity === 'serviceRecord') {
-      if (action === 'upsert' && payload) {
+      if ((action === 'upsert' || action === 'update_fields') && payload) {
         await saveServiceRecordToFirestore(
-          payload as unknown as ServiceRecord,
+          { ...(payload as unknown as ServiceRecord), id: targetId },
           userId,
-          linkedReminderUpdate?.reminder,
-          concurrency,
-          linkedRemConcurrency
+          linkedReminderToUpdate,
+          concurrencyOpts
         );
       } else if (action === 'delete') {
-        await deleteServiceRecordFromFirestore(targetId, userId, concurrency);
+        await deleteServiceRecordFromFirestore(targetId, userId, concurrencyOpts);
       }
     }
 
     completeDirectOnlineMutation({
       userId,
       mutationId: queuedItem.id,
-      expectedGeneration,
-      entity,
-      targetId,
-      concurrency,
-    });
-
-    if (linkedRemQueuedItem && linkedRemConcurrency) {
-      completeDirectOnlineMutation({
-        userId,
-        mutationId: linkedRemQueuedItem.id,
-        expectedGeneration: linkedRemExpectedGeneration,
-        entity: 'reminder',
-        targetId: linkedRemQueuedItem.targetId,
-        concurrency: linkedRemConcurrency,
-      });
-    }
-
-    return { status: 'synced', queuedItem, concurrency };
-  } catch (err) {
-    const handled = handleDirectOnlineMutationError(err, {
-      userId,
-      mutationId: queuedItem.id,
-      expectedGeneration,
-      fallbackItem: queuedItem,
-    });
-
-    if (linkedRemQueuedItem) {
-      handleDirectOnlineMutationError(err, {
-        userId,
-        mutationId: linkedRemQueuedItem.id,
-        expectedGeneration: linkedRemExpectedGeneration,
-        fallbackItem: linkedRemQueuedItem,
-      });
-    }
-
-    if (handled.classification === 'version_conflict') {
-      return {
-        status: 'version_conflict',
-        queuedItem,
-        concurrency,
-        quarantinedItem: handled.quarantinedItem,
-        conflictDetails: handled.conflictDetails,
-        error: err,
-      };
-    }
-
-    if (
-      handled.classification === 'quota_exceeded' ||
-      handled.classification === 'permission_or_validation_error'
-    ) {
-      return {
-        status: 'quota_or_permission_error',
-        queuedItem,
-        concurrency,
-        quarantinedItem: handled.quarantinedItem,
-        error: err,
-      };
-    }
-
-    // Offline / temporary network failure: also enqueue any OEM reminders for newly created bike
-    if (oemRemindersToCreate && oemRemindersToCreate.length > 0) {
-      for (const rem of oemRemindersToCreate) {
-        enqueueOfflineMutation({
-          userId,
-          entity: 'reminder',
-          action: 'upsert',
-          targetId: rem.id,
-          payload: rem as unknown as Record<string, unknown>,
-          createdAtIso,
-          baseCloudUpdatedAt: null,
-          baseCloudVersion: null,
-          expectedCloudAbsent: true,
-        });
-      }
-    }
-
-    return {
-      status: 'offline_queued',
-      queuedItem,
-      concurrency,
-      error: err,
-    };
-  }
-}
-
-export async function flushOfflineMutationQueue(userId: string): Promise<{
-  flushedCount: number;
-  failedCount: number;
-  quarantinedCount: number;
-  skippedOffline: boolean;
-}> {
-  if (!userId) {
-    return { flushedCount: 0, failedCount: 0, quarantinedCount: 0, skippedOffline: false };
-  }
-
-  // Prevent retries while offline: do not flush, do not increment retryCount, do not modify or remove queued mutations
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    return { flushedCount: 0, failedCount: 0, quarantinedCount: 0, skippedOffline: true };
-  }
-
-  const queue = getOfflineMutationQueue(userId);
-  if (queue.length === 0) {
-    return { flushedCount: 0, failedCount: 0, quarantinedCount: 0, skippedOffline: false };
-  }
-
-  let flushedCount = 0;
-  let failedCount = 0;
-  let quarantinedCount = 0;
-  const remainingQueue = [...queue];
-  const MAX_RETRIES = 5;
-
-  for (const item of queue) {
-    // Re-check offline status before each item so mid-queue disconnection never increments retryCount
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      saveOfflineMutationQueue(userId, remainingQueue);
-      return { flushedCount, failedCount, quarantinedCount, skippedOffline: true };
-    }
-
-    const hasValidBaseTimestamp =
-      typeof item.baseCloudUpdatedAt === 'string' && item.baseCloudUpdatedAt.length > 0;
-    const hasValidBaseRevision =
-      typeof item.baseCloudVersion === 'number' && Number.isFinite(item.baseCloudVersion);
-    const isExpectedAbsent =
-      item.expectedCloudAbsent === true && !item.baseCloudUpdatedAt && !hasValidBaseRevision;
-    const isUntrustedLegacy =
-      Boolean(item.baseVersionUntrusted) ||
-      (!hasValidBaseTimestamp && !hasValidBaseRevision && !isExpectedAbsent);
-
-    const concurrencyOptions: WriteConcurrencyOptions = {
+      expectedGeneration: queuedItem.mutationGeneration ?? 1,
       enforceVersionCheck: true,
-      baseCloudUpdatedAt: hasValidBaseTimestamp ? item.baseCloudUpdatedAt : null,
-      baseCloudVersion: hasValidBaseRevision ? item.baseCloudVersion : null,
-      expectedCloudAbsent: isExpectedAbsent,
-      baseVersionUntrusted: isUntrustedLegacy,
-    };
-
-    try {
-      if (item.entity === 'motorcycle') {
-        if (item.action === 'upsert' && item.payload) {
-          await saveMotorcycleToFirestore(
-            item.payload as unknown as Motorcycle,
-            userId,
-            concurrencyOptions
-          );
-        } else if (item.action === 'update_fields' && item.payload) {
-          await updateMotorcycleFieldsInFirestore(
-            item.targetId,
-            userId,
-            item.payload as any,
-            concurrencyOptions
-          );
-        } else if (item.action === 'delete') {
-          await deleteMotorcycleFromFirestore(item.targetId, userId, {
-            concurrency: concurrencyOptions,
-          });
-        }
-      } else if (item.entity === 'reminder') {
-        if (item.action === 'upsert' && item.payload) {
-          await saveReminderToFirestore(
-            item.payload as unknown as MaintenanceReminder,
-            userId,
-            concurrencyOptions
-          );
-        } else if (item.action === 'delete') {
-          await deleteReminderFromFirestore(item.targetId, userId, concurrencyOptions);
-        }
-      } else if (item.entity === 'serviceRecord') {
-        if (item.action === 'upsert' && item.payload) {
-          await saveServiceRecordToFirestore(
-            item.payload as unknown as ServiceRecord,
-            userId,
-            undefined,
-            concurrencyOptions
-          );
-        } else if (item.action === 'delete') {
-          await deleteServiceRecordFromFirestore(item.targetId, userId, concurrencyOptions);
-        }
-      }
-
-      removeOfflineMutation(userId, item.id);
-      const idx = remainingQueue.findIndex((q) => q.id === item.id);
-      if (idx >= 0) remainingQueue.splice(idx, 1);
-      flushedCount++;
-    } catch (err: any) {
-      const isNowOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
-      if (isNowOffline) {
-        // Device went offline during the attempt: do NOT increment retryCount or discard/quarantine
-        saveOfflineMutationQueue(userId, remainingQueue);
-        return { flushedCount, failedCount, quarantinedCount, skippedOffline: true };
-      }
-
-      failedCount++;
-      const errMsg = err?.message || String(err);
-      const nextRetryCount = (item.retryCount || 0) + 1;
-      const classification = classifyMutationFailure(
-        errMsg,
-        nextRetryCount,
-        MAX_RETRIES,
-        false
-      );
-
-      const shouldQuarantine =
-        classification === 'version_conflict' ||
-        classification === 'permission_or_validation_error' ||
-        classification === 'quota_exceeded' ||
-        classification === 'retry_exhausted';
-
-      const conflictDetails: ConcurrencyConflictDetails | undefined = (err as any)?.conflictDetails;
-
-      const idx = remainingQueue.findIndex((q) => q.id === item.id);
-      if (idx >= 0) {
-        if (shouldQuarantine) {
-          // Preserve complete original payload and base version in UID-scoped quarantine BEFORE removing from active queue
-          quarantineOfflineMutation({
-            item: isUntrustedLegacy ? { ...item, baseVersionUntrusted: true } : item,
-            lastError: errMsg,
-            retryCount: nextRetryCount,
-            failureClassification: classification,
-            conflictCloudUpdatedAt: conflictDetails?.currentCloudUpdatedAt ?? undefined,
-            conflictCloudVersion: conflictDetails?.currentCloudVersion ?? undefined,
-            conflictReason: conflictDetails?.reason ?? undefined,
-          });
-          remainingQueue.splice(idx, 1);
-          removeOfflineMutation(userId, item.id);
-          quarantinedCount++;
-        } else {
-          // Temporary network error: keep in active queue with updated retryCount and lastError
-          remainingQueue[idx] = {
-            ...remainingQueue[idx],
-            retryCount: nextRetryCount,
-            lastError: errMsg,
-          };
-        }
+    });
+    return { status: 'synced' };
+  } catch (err: any) {
+    const errMsg = String(err?.message || err || 'Unknown error');
+    const classification = classifyMutationFailure(errMsg, 1, MAX_OFFLINE_MUTATION_RETRIES, false);
+    if (
+      classification === 'version_conflict' ||
+      classification === 'quota_exceeded' ||
+      classification === 'permission_or_validation_error'
+    ) {
+      quarantineOfflineMutation({
+        item: queuedItem,
+        lastError: errMsg,
+        retryCount: 1,
+        failureClassification: classification,
+        conflictCloudUpdatedAt: err?.conflictCloudUpdatedAt,
+        conflictCloudVersion: err?.conflictCloudVersion,
+        conflictReason: err?.conflictReason || errMsg,
+      });
+      removeOfflineMutation(userId, queuedItem.id);
+      if (classification === 'version_conflict') {
+        return { status: 'version_conflict', errorMessage: errMsg };
       }
     }
+    return { status: 'error', errorMessage: errMsg };
   }
-
-  saveOfflineMutationQueue(userId, remainingQueue);
-  return { flushedCount, failedCount, quarantinedCount, skippedOffline: false };
 }
 
 /**
- * Safely recovers/requeues a quarantined mutation for `userId`.
- * - Strictly UID-scoped: never accesses or recovers another user's quarantined items.
- * - Requires trustworthy base-version information (`baseCloudUpdatedAt`, `baseCloudVersion`, or `expectedCloudAbsent === true`).
- * - Pre-read when online acts as an early warning/preview; the decisive concurrency check
- *   is always enforced inside the Firestore transaction when `flushOfflineMutationQueue` replays.
+ * Debounces rapid odometer updates (default 600ms) while immediately persisting the coalesced
+ * mutation in the durable queue with the original pre-edit base version.
  */
-export async function recoverQuarantinedMutationSafely(
-  userId: string,
-  mutationId: string
-): Promise<{
-  status: 'requeued' | 'skipped_newer_cloud' | 'missing_base_version' | 'not_found';
-  item?: OfflineMutationItem;
-  detail: string;
-}> {
-  if (!userId || !mutationId) {
-    return { status: 'not_found', detail: 'User ID and mutation ID are required.' };
+export function scheduleDirectOnlineOdometerUpdate(params: {
+  userId: string;
+  targetBikeId: string;
+  newOdo: number;
+  preEditBike: Motorcycle;
+  debounceTimerRef: { current: ReturnType<typeof setTimeout> | null };
+  delayMs?: number;
+  onStatusChange?: (status: CloudSyncStatus) => void;
+}): void {
+  const {
+    userId,
+    targetBikeId,
+    newOdo,
+    preEditBike,
+    debounceTimerRef,
+    delayMs = 600,
+    onStatusChange,
+  } = params;
+
+  const baseCloudUpdatedAt =
+    preEditBike.updatedAt && preEditBike.timestampSource !== 'client_pending'
+      ? preEditBike.updatedAt
+      : getKnownCloudVersion(userId, 'motorcycle', targetBikeId);
+  const baseCloudVersion =
+    typeof preEditBike.cloudVersion === 'number'
+      ? preEditBike.cloudVersion
+      : getKnownCloudRevision(userId, 'motorcycle', targetBikeId);
+
+  const queued = enqueueOfflineMutation({
+    userId,
+    entity: 'motorcycle',
+    action: 'update_fields',
+    targetId: targetBikeId,
+    payload: { odometer: newOdo },
+    baseCloudUpdatedAt,
+    baseCloudVersion,
+    expectedCloudAbsent: false,
+  });
+
+  if (debounceTimerRef.current) {
+    clearTimeout(debounceTimerRef.current);
   }
 
-  const quarantinedList = getQuarantinedMutationQueue(userId);
-  const target = quarantinedList.find((q) => q.id === mutationId && q.userId === userId);
-  if (!target) {
-    return {
-      status: 'not_found',
-      detail: 'Quarantined mutation not found for the current authenticated user.',
-    };
-  }
+  onStatusChange?.('syncing');
 
-  const hasTrustworthyBaseVersion =
-    !target.baseVersionUntrusted &&
-    ((typeof target.baseCloudUpdatedAt === 'string' && target.baseCloudUpdatedAt.length > 0) ||
-      typeof target.baseCloudVersion === 'number' ||
-      target.expectedCloudAbsent === true);
-
-  if (!hasTrustworthyBaseVersion) {
-    return {
-      status: 'missing_base_version',
-      detail:
-        'Cannot automatically requeue: mutation is missing a trustworthy base cloud version. Manual conflict review is required.',
-    };
-  }
-
-  // Early-warning preview when online (the decisive concurrency check still occurs inside the replay transaction)
-  const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
-  if (isOnline) {
-    const colName =
-      target.entity === 'motorcycle'
-        ? 'motorcycles'
-        : target.entity === 'reminder'
-        ? 'reminders'
-        : 'serviceRecords';
-    try {
-      const snap = await getDoc(doc(db, colName, target.targetId));
-      if (snap.exists()) {
-        const cloudData = snap.data();
-        const cloudUpdatedIso =
-          normalizeFirestoreTimestampToIso(cloudData?.updatedAt) ||
-          normalizeFirestoreTimestampToIso(cloudData?.createdAt) ||
-          null;
-        const cloudUpdatedMs =
-          parseTimestampToMillis(cloudData?.updatedAt) ??
-          parseTimestampToMillis(cloudData?.createdAt);
-        const cloudRev =
-          typeof cloudData?.cloudVersion === 'number' && Number.isFinite(cloudData.cloudVersion)
-            ? cloudData.cloudVersion
-            : null;
-
-        if (target.expectedCloudAbsent && !target.baseCloudUpdatedAt && target.baseCloudVersion == null) {
-          return {
-            status: 'skipped_newer_cloud',
-            detail: `Firestore already contains a document for ${target.entity} #${target.targetId} (version ${cloudUpdatedIso || 'unknown'}). Recovery blocked to prevent overwriting cloud data.`,
-          };
-        }
-
-        if (typeof target.baseCloudVersion === 'number' && cloudRev !== null && cloudRev !== target.baseCloudVersion) {
-          return {
-            status: 'skipped_newer_cloud',
-            detail: `Firestore contains a newer revision (v${cloudRev}) than the mutation base revision (v${target.baseCloudVersion}). Recovery skipped to prevent overwriting newer cloud data.`,
-          };
-        }
-
-        if (target.baseCloudUpdatedAt) {
-          const baseMs = parseTimestampToMillis(target.baseCloudUpdatedAt);
-          const isoMatches =
-            cloudUpdatedIso !== null && cloudUpdatedIso === target.baseCloudUpdatedAt;
-          const msMatches =
-            cloudUpdatedMs !== null && baseMs !== null && cloudUpdatedMs === baseMs;
-
-          if (!isoMatches || !msMatches) {
-            return {
-              status: 'skipped_newer_cloud',
-              detail: `Firestore contains a newer version (${cloudUpdatedIso || 'unknown'}) than the mutation base version (${target.baseCloudUpdatedAt}). Recovery skipped to prevent overwriting newer cloud data.`,
-            };
-          }
-        }
-
-        if (
-          target.entity === 'motorcycle' &&
-          typeof cloudData?.odometer === 'number' &&
-          typeof target.payload?.odometer === 'number' &&
-          cloudData.odometer > target.payload.odometer
-        ) {
-          return {
-            status: 'skipped_newer_cloud',
-            detail: `Cloud motorcycle odometer (${cloudData.odometer.toLocaleString()} km) is higher than quarantined payload (${Number(target.payload.odometer).toLocaleString()} km).`,
-          };
-        }
-      }
-    } catch {
-      // If offline or unable to pre-read, requeued item retains baseCloudUpdatedAt/baseCloudVersion so the replay transaction enforces the check
+  debounceTimerRef.current = setTimeout(async () => {
+    debounceTimerRef.current = null;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      onStatusChange?.('offline_cache');
+      return;
     }
-  }
 
-  const requeued = requeueQuarantinedMutation(userId, mutationId);
-  if (!requeued) {
-    return { status: 'not_found', detail: 'Could not requeue quarantined mutation.' };
-  }
+    const latestQueue = getOfflineMutationQueue(userId);
+    const currentItem =
+      latestQueue.find((q) => q.id === queued.id) ||
+      latestQueue.find((q) => q.entity === 'motorcycle' && q.targetId === targetBikeId);
+    if (!currentItem) {
+      onStatusChange?.('synced');
+      return;
+    }
 
-  return {
-    status: 'requeued',
-    item: requeued,
-    detail: `Mutation ${requeued.id} (${requeued.action} ${requeued.entity}) returned to active queue with base version preserved and retryCount reset to 0.`,
-  };
+    const generationToComplete = currentItem.mutationGeneration ?? 1;
+    try {
+      await updateMotorcycleFieldsInFirestore(
+        targetBikeId,
+        userId,
+        (currentItem.payload as Partial<Motorcycle>) || { odometer: newOdo },
+        {
+          enforceVersionCheck: true,
+          baseCloudUpdatedAt: currentItem.baseCloudUpdatedAt,
+          baseCloudVersion: currentItem.baseCloudVersion,
+          expectedCloudAbsent: currentItem.expectedCloudAbsent,
+        }
+      );
+
+      completeDirectOnlineMutation({
+        userId,
+        mutationId: currentItem.id,
+        expectedGeneration: generationToComplete,
+        enforceVersionCheck: true,
+      });
+      onStatusChange?.('synced');
+    } catch (err: any) {
+      const errMsg = String(err?.message || err || 'Odometer sync failed');
+      const classification = classifyMutationFailure(errMsg, 1, MAX_OFFLINE_MUTATION_RETRIES, false);
+      if (
+        classification === 'version_conflict' ||
+        classification === 'quota_exceeded' ||
+        classification === 'permission_or_validation_error'
+      ) {
+        quarantineOfflineMutation({
+          item: currentItem,
+          lastError: errMsg,
+          retryCount: 1,
+          failureClassification: classification,
+          conflictCloudUpdatedAt: err?.conflictCloudUpdatedAt,
+          conflictCloudVersion: err?.conflictCloudVersion,
+          conflictReason: err?.conflictReason || errMsg,
+        });
+        removeOfflineMutation(userId, currentItem.id);
+      }
+      onStatusChange?.('sync_error');
+    }
+  }, delayMs);
 }
 
-export interface SyncStorageToFirestoreOptions {
+/**
+ * Controlled Legacy LocalStorage -> Firestore Migration with Per-Entity Ledger Checkpoints
+ * and Pre-Migration Immutable Backup.
+ */
+export async function syncStorageToFirestore(params: {
   userId: string;
   userEmail: string;
   hasProAccess: boolean;
-  /**
-   * Explicit user confirmation is required before migrating legacy unscoped LocalStorage records.
-   */
   userConfirmedOwnership: boolean;
-  /**
-   * Optional list of selected motorcycle IDs when a Free user has >1 local motorcycle.
-   */
   selectedBikeIds?: string[];
-  motorcyclesToSync?: Motorcycle[];
-  remindersToSync?: MaintenanceReminder[];
-  serviceRecordsToSync?: ServiceRecord[];
+  motorcyclesToSync: Motorcycle[];
+  remindersToSync: MaintenanceReminder[];
+  serviceRecordsToSync: ServiceRecord[];
   existingCloudMotorcycles?: Motorcycle[];
   existingCloudReminders?: MaintenanceReminder[];
   existingCloudServiceRecords?: ServiceRecord[];
-}
-
-export interface SyncStorageToFirestoreResult {
+}): Promise<{
   ledger: MigrationLedger;
   migratedMotorcyclesCount: number;
   migratedRemindersCount: number;
   migratedServiceRecordsCount: number;
-  skippedDuplicateCount: number;
-  protectedNewerCloudCount: number;
-  conflicts: SyncConflictItem[];
-}
-
-/**
- * `syncStorageToFirestore`:
- * Detects local changes and performs atomic/transactional writes to user-scoped Firestore collections
- * for motorcycles, reminders, and service records, ensuring that LocalStorage acts only as a
- * read-through cache.
- *
- * Enforces all Phase 2, Phase 3, and Phase 4 safety invariants:
- * 1. Requires `userConfirmedOwnership === true` before migrating unscoped legacy records.
- * 2. Creates an immutable UID-scoped backup (`motocare_pre_cloud_migration_backup_v1_${userId}`).
- * 3. Rejects foreign UIDs and filters out all mock/sample IDs.
- * 4. Checkpoints every migrated ID in `MigrationLedger` so interrupted runs resume idempotently.
- * 5. Never overwrites newer Firestore records with older LocalStorage records (enforced inside transactions).
- * 6. Enforces the 1-motorcycle Free quota using `selectedBikeIds` when `!hasProAccess`.
- */
-export async function syncStorageToFirestore(
-  options: SyncStorageToFirestoreOptions
-): Promise<SyncStorageToFirestoreResult> {
+}> {
   const {
     userId,
     userEmail,
@@ -3481,37 +1859,29 @@ export async function syncStorageToFirestore(
     motorcyclesToSync = [],
     remindersToSync = [],
     serviceRecordsToSync = [],
-    existingCloudMotorcycles,
-    existingCloudReminders,
-    existingCloudServiceRecords,
-  } = options;
-
-  if (!userId) {
-    throw new Error('AUTH_REQUIRED: Cannot synchronize to Firestore without an authenticated userId.');
-  }
+  } = params;
 
   if (!userConfirmedOwnership) {
-    throw new Error('CONFIRMATION_REQUIRED: Rider must explicitly confirm ownership of legacy local records before migration.');
+    throw new Error(
+      'CONFIRMATION_REQUIRED: Explicit user ownership confirmation is required before migrating local records to Firestore.'
+    );
   }
 
-  // 1. Always create the immutable pre-migration backup first
+  // 1. Always create an immutable pre-migration backup before touching Firestore
   createImmutablePreMigrationBackup(userId, userEmail);
 
-  // 2. Load or initialize the idempotent MigrationLedger
-  const existingLedger = loadMigrationLedger(userId);
   const nowIso = new Date().toISOString();
+  const existingLedger = loadMigrationLedger(userId);
   const ledger: MigrationLedger = existingLedger
     ? {
         ...existingLedger,
         status: 'in_progress',
-        selectedBikeIds: selectedBikeIds ?? existingLedger.selectedBikeIds,
         updatedAt: nowIso,
       }
     : {
         userId,
         userEmail,
         status: 'in_progress',
-        selectedBikeIds,
         motorcyclesCompletedIds: [],
         remindersCompletedIds: [],
         serviceRecordsCompletedIds: [],
@@ -3522,308 +1892,943 @@ export async function syncStorageToFirestore(
       };
   saveMigrationLedger(ledger);
 
-  // 3. Fetch authoritative cloud state if not provided
-  const cloudBikes = existingCloudMotorcycles ?? (await fetchUserMotorcyclesOnce(userId));
-  const cloudReminders = existingCloudReminders ?? (await fetchUserRemindersOnce(userId));
-  const cloudRecords = existingCloudServiceRecords ?? (await fetchUserServiceRecordsOnce(userId));
-
-  const cloudBikesById = new Map(cloudBikes.map((b) => [b.id, b]));
-  const cloudRemindersById = new Map(cloudReminders.map((r) => [r.id, r]));
-  const cloudRecordsById = new Map(cloudRecords.map((r) => [r.id, r]));
+  // Filter out sample IDs & foreign UIDs
+  let eligibleBikes = motorcyclesToSync.filter(
+    (b) =>
+      b &&
+      b.id &&
+      !CONFIRMED_SAMPLE_MOTORCYCLE_IDS.has(b.id) &&
+      (!b.userId || b.userId === userId)
+  );
+  if (selectedBikeIds && selectedBikeIds.length > 0) {
+    const selectedSet = new Set(selectedBikeIds);
+    eligibleBikes = eligibleBikes.filter((b) => selectedSet.has(b.id));
+  }
+  if (!hasProAccess && eligibleBikes.length > 1) {
+    eligibleBikes = eligibleBikes.slice(0, 1);
+  }
 
   let migratedMotorcyclesCount = 0;
-  let migratedRemindersCount = 0;
-  let migratedServiceRecordsCount = 0;
-  let skippedDuplicateCount = 0;
-  let protectedNewerCloudCount = 0;
-  const conflicts: SyncConflictItem[] = [];
-
-  const normalizeKey = (s: string | undefined) => (s || '').trim().toLowerCase();
-
-  // --- STAGE 1: MOTORCYCLES ---
-  const allowedNewBikesQuota = hasProAccess ? 999 : Math.max(0, 1 - cloudBikes.length);
-  let newBikesCreatedInThisRun = 0;
-
-  for (const localBike of motorcyclesToSync) {
-    if (!localBike || !localBike.id) continue;
-    if (CONFIRMED_SAMPLE_MOTORCYCLE_IDS.has(localBike.id)) continue;
-    if (localBike.userId && localBike.userId !== userId) continue;
-
-    // If user specified selectedBikeIds (e.g. Free tier selection), only sync selected motorcycles
-    if (
-      selectedBikeIds &&
-      selectedBikeIds.length > 0 &&
-      !selectedBikeIds.includes(localBike.id)
-    ) {
+  for (const bike of eligibleBikes) {
+    if (ledger.motorcyclesCompletedIds.includes(bike.id)) {
       continue;
     }
-
-    const existingCloud = cloudBikesById.get(localBike.id);
-    if (existingCloud) {
-      const resolution = resolveMotorcycleConflict(localBike, existingCloud);
-      if (resolution.conflict) {
-        conflicts.push(resolution.conflict);
-      }
-      if (resolution.winner === 'cloud') {
-        protectedNewerCloudCount++;
-        if (!ledger.motorcyclesCompletedIds.includes(localBike.id)) {
-          ledger.motorcyclesCompletedIds.push(localBike.id);
-          saveMigrationLedger(ledger);
-        }
-        continue;
-      }
-      // Local explicitly has a newer client_pending timestamp and non-contradictory odometer:
-      // still enforce version check against `existingCloud` inside the Firestore transaction!
-      await saveMotorcycleToFirestore(
-        { ...localBike, userId },
-        userId,
-        {
-          enforceVersionCheck: true,
-          baseCloudUpdatedAt: existingCloud.updatedAt || existingCloud.createdAt || null,
-          baseCloudVersion: existingCloud.cloudVersion ?? null,
-          expectedCloudAbsent: false,
-        }
-      );
-      migratedMotorcyclesCount++;
-      if (!ledger.motorcyclesCompletedIds.includes(localBike.id)) {
-        ledger.motorcyclesCompletedIds.push(localBike.id);
-        saveMigrationLedger(ledger);
-      }
-      continue;
-    }
-
-    // Check semantic duplicate in cloud (same non-empty licensePlate or identical brand+model+year)
-    const semanticMatch = cloudBikes.find((cb) => {
-      const samePlate =
-        localBike.licensePlate &&
-        cb.licensePlate &&
-        normalizeKey(localBike.licensePlate) === normalizeKey(cb.licensePlate);
-      const sameModelYear =
-        normalizeKey(localBike.brand) === normalizeKey(cb.brand) &&
-        normalizeKey(localBike.model) === normalizeKey(cb.model) &&
-        localBike.year === cb.year &&
-        normalizeKey(localBike.nickname) === normalizeKey(cb.nickname);
-      return Boolean(samePlate || sameModelYear);
-    });
-
-    if (semanticMatch) {
-      ledger.bikeIdRemap[localBike.id] = semanticMatch.id;
-      if (!ledger.motorcyclesCompletedIds.includes(localBike.id)) {
-        ledger.motorcyclesCompletedIds.push(localBike.id);
-      }
-      saveMigrationLedger(ledger);
-      skippedDuplicateCount++;
-      continue;
-    }
-
-    // Check Free tier quota before creating a new bike
-    if (!hasProAccess && newBikesCreatedInThisRun >= allowedNewBikesQuota) {
-      continue;
-    }
-
-    await saveMotorcycleToFirestore(
-      { ...localBike, userId },
-      userId,
-      {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: null,
-        baseCloudVersion: null,
-        expectedCloudAbsent: true,
-      }
-    );
-    newBikesCreatedInThisRun++;
-    migratedMotorcyclesCount++;
-    cloudBikesById.set(localBike.id, { ...localBike, userId });
-    if (!ledger.motorcyclesCompletedIds.includes(localBike.id)) {
-      ledger.motorcyclesCompletedIds.push(localBike.id);
-    }
+    await saveMotorcycleToFirestore({ ...bike, userId }, userId);
+    ledger.motorcyclesCompletedIds.push(bike.id);
+    ledger.bikeIdRemap[bike.id] = bike.id;
+    ledger.updatedAt = new Date().toISOString();
     saveMigrationLedger(ledger);
+    migratedMotorcyclesCount += 1;
   }
 
-  // --- STAGE 2: REMINDERS ---
-  const remindersBatch: MaintenanceReminder[] = [];
-  const reminderConcurrencyById: Record<string, WriteConcurrencyOptions> = {};
-  for (const localRem of remindersToSync) {
-    if (!localRem || !localRem.id) continue;
-    if (CONFIRMED_SAMPLE_REMINDER_IDS.has(localRem.id)) continue;
-    if (localRem.userId && localRem.userId !== userId) continue;
-    if (ledger.remindersCompletedIds.includes(localRem.id)) continue;
+  const eligibleReminders = remindersToSync.filter(
+    (r) =>
+      r &&
+      r.id &&
+      !CONFIRMED_SAMPLE_REMINDER_IDS.has(r.id) &&
+      (!r.userId || r.userId === userId) &&
+      !ledger.remindersCompletedIds.includes(r.id)
+  );
 
-    const targetBikeId = ledger.bikeIdRemap[localRem.bikeId] || localRem.bikeId;
-    // Reminder must reference a motorcycle owned by the user in cloud
-    if (!cloudBikesById.has(targetBikeId)) {
-      continue;
-    }
-
-    const existingCloudRem = cloudRemindersById.get(localRem.id);
-    if (existingCloudRem) {
-      // Protect newer or equal cloud reminder
-      const localOdo = localRem.lastCompletedOdo || 0;
-      const cloudOdo = existingCloudRem.lastCompletedOdo || 0;
-      if (cloudOdo >= localOdo) {
-        protectedNewerCloudCount++;
-        if (!ledger.remindersCompletedIds.includes(localRem.id)) {
-          ledger.remindersCompletedIds.push(localRem.id);
-        }
-        continue;
-      }
-      reminderConcurrencyById[localRem.id] = {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: existingCloudRem.updatedAt || existingCloudRem.createdAt || null,
-        baseCloudVersion: existingCloudRem.cloudVersion ?? null,
-        expectedCloudAbsent: false,
-      };
-    } else {
-      // Semantic duplicate check (same bikeId + title + category)
-      const duplicateRem = cloudReminders.find(
-        (cr) =>
-          cr.bikeId === targetBikeId &&
-          normalizeKey(cr.title) === normalizeKey(localRem.title) &&
-          normalizeKey(cr.category) === normalizeKey(localRem.category)
-      );
-      if (duplicateRem) {
-        skippedDuplicateCount++;
-        if (!ledger.remindersCompletedIds.includes(localRem.id)) {
-          ledger.remindersCompletedIds.push(localRem.id);
-        }
-        continue;
-      }
-      reminderConcurrencyById[localRem.id] = {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: null,
-        baseCloudVersion: null,
-        expectedCloudAbsent: true,
-      };
-    }
-
-    remindersBatch.push({
-      ...localRem,
-      bikeId: targetBikeId,
-      userId,
-    });
-  }
-
-  if (remindersBatch.length > 0) {
-    await saveRemindersBatchToFirestore(remindersBatch, userId, {
-      concurrencyById: reminderConcurrencyById,
-      onChunkCommitted: (committedIds) => {
-        for (const id of committedIds) {
-          migratedRemindersCount++;
+  let migratedRemindersCount = 0;
+  if (eligibleReminders.length > 0) {
+    await saveRemindersBatchToFirestore(eligibleReminders, userId, {
+      onChunkCommitted: (chunkIds) => {
+        for (const id of chunkIds) {
           if (!ledger.remindersCompletedIds.includes(id)) {
             ledger.remindersCompletedIds.push(id);
+            migratedRemindersCount += 1;
           }
         }
+        ledger.updatedAt = new Date().toISOString();
         saveMigrationLedger(ledger);
       },
     });
   }
 
-  // --- STAGE 3: SERVICE RECORDS (Append-Mostly, Preserves History) ---
-  const recordsBatch: ServiceRecord[] = [];
-  for (const localRec of serviceRecordsToSync) {
-    if (!localRec || !localRec.id) continue;
-    if (CONFIRMED_SAMPLE_SERVICE_RECORD_IDS.has(localRec.id)) continue;
-    if (localRec.userId && localRec.userId !== userId) continue;
-    if (ledger.serviceRecordsCompletedIds.includes(localRec.id)) continue;
+  const eligibleRecords = serviceRecordsToSync.filter(
+    (r) =>
+      r &&
+      r.id &&
+      !CONFIRMED_SAMPLE_SERVICE_RECORD_IDS.has(r.id) &&
+      (!r.userId || r.userId === userId) &&
+      !ledger.serviceRecordsCompletedIds.includes(r.id)
+  );
 
-    const targetBikeId = ledger.bikeIdRemap[localRec.bikeId] || localRec.bikeId;
-
-    const existingCloudRec = cloudRecordsById.get(localRec.id);
-    if (existingCloudRec) {
-      protectedNewerCloudCount++;
-      if (!ledger.serviceRecordsCompletedIds.includes(localRec.id)) {
-        ledger.serviceRecordsCompletedIds.push(localRec.id);
-      }
-      continue;
-    }
-
-    // Semantic duplicate check (same bikeId + date + odometer + title + totalCostPhp)
-    const duplicateRec = cloudRecords.find(
-      (cr) =>
-        cr.bikeId === targetBikeId &&
-        cr.date === localRec.date &&
-        cr.odometer === localRec.odometer &&
-        normalizeKey(cr.title) === normalizeKey(localRec.title) &&
-        cr.totalCostPhp === localRec.totalCostPhp
-    );
-    if (duplicateRec) {
-      skippedDuplicateCount++;
-      if (!ledger.serviceRecordsCompletedIds.includes(localRec.id)) {
-        ledger.serviceRecordsCompletedIds.push(localRec.id);
-      }
-      continue;
-    }
-
-    recordsBatch.push({
-      ...localRec,
-      bikeId: targetBikeId,
-      userId,
-    });
-  }
-
-  if (recordsBatch.length > 0) {
-    await saveServiceRecordsBatchToFirestore(recordsBatch, userId, {
-      defaultConcurrency: {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: null,
-        baseCloudVersion: null,
-        expectedCloudAbsent: true,
-      },
-      onChunkCommitted: (committedIds) => {
-        for (const id of committedIds) {
-          migratedServiceRecordsCount++;
+  let migratedServiceRecordsCount = 0;
+  if (eligibleRecords.length > 0) {
+    await saveServiceRecordsBatchToFirestore(eligibleRecords, userId, {
+      onChunkCommitted: (chunkIds) => {
+        for (const id of chunkIds) {
           if (!ledger.serviceRecordsCompletedIds.includes(id)) {
             ledger.serviceRecordsCompletedIds.push(id);
+            migratedServiceRecordsCount += 1;
           }
         }
+        ledger.updatedAt = new Date().toISOString();
         saveMigrationLedger(ledger);
       },
     });
   }
 
-  // Mark ledger completed
   ledger.status = 'completed';
   ledger.completedAt = new Date().toISOString();
   ledger.updatedAt = ledger.completedAt;
   saveMigrationLedger(ledger);
-
-  // Update UID-scoped read-through caches
-  saveUserScopedMotorcycles(userId, Array.from(cloudBikesById.values()));
-  saveUserScopedReminders(userId, [...cloudReminders, ...remindersBatch]);
-  saveUserScopedServiceRecords(userId, [...cloudRecords, ...recordsBatch]);
 
   return {
     ledger,
     migratedMotorcyclesCount,
     migratedRemindersCount,
     migratedServiceRecordsCount,
-    skippedDuplicateCount,
-    protectedNewerCloudCount,
-    conflicts,
   };
 }
 
-// 8. Admin: Subscribe to All Users Live
-export function subscribeToAllUsers(
-  callback: (users: Record<string, any>[]) => void
-): () => void {
-  const path = 'users';
-  return onSnapshot(
-    collection(db, 'users'),
-    (snapshot) => {
-      const items: Record<string, any>[] = [];
-      snapshot.forEach((docSnap) => {
-        items.push({ id: docSnap.id, ...docSnap.data() });
+export interface PermanentAccountDeletionSummary {
+  deletedUid: string;
+  releasedEmail: string | null;
+  deletedMotorcyclesCount: number;
+  deletedRemindersCount: number;
+  deletedServiceRecordsCount: number;
+  deletedPaymentSubmissionsCount: number;
+}
+
+/**
+ * Permanently deletes a user's MotoCare account and all associated personal data:
+ * (a) Re-authenticates the user first (Google popup or Email/Password credential).
+ * (b) Deletes reminders, service records, pending payment submissions, then motorcycles
+ *     via the atomic `deleteMotorcycleFromFirestore` transaction so `bikeCount` reaches 0.
+ * (c) Deletes the `/users/{uid}` document only after `bikeCount` is 0.
+ * (d) Calls Firebase Auth `deleteUser` last and purges local storage caches.
+ *
+ * Errors are never swallowed: if any step fails, execution halts immediately and throws a clear error.
+ */
+export async function permanentlyDeleteUserAccount(
+  authUser?:
+    | User
+    | {
+        uid: string;
+        email?: string | null;
+        providerData?: Array<{ providerId: string }>;
+        delete?: () => Promise<void>;
+      }
+    | null,
+  password?: string
+): Promise<PermanentAccountDeletionSummary> {
+  const targetUser = authUser || auth.currentUser;
+  if (!targetUser || !targetUser.uid) {
+    throw new Error('No authenticated user found to delete.');
+  }
+
+  const uid = targetUser.uid;
+  const email = targetUser.email ? targetUser.email.trim().toLowerCase() : null;
+
+  // (a) Re-authenticate first
+  await reauthenticateUserForDeletion(targetUser, password);
+
+  // (b) Query and delete reminders, service records, pending payment submissions, then motorcycles
+  const [remindersSnap, recordsSnap, paymentsSnap, motorcyclesSnap] = await Promise.all([
+    getDocs(query(collection(db, 'reminders'), where('userId', '==', uid))),
+    getDocs(query(collection(db, 'serviceRecords'), where('userId', '==', uid))),
+    getDocs(query(collection(db, 'paymentSubmissions'), where('userId', '==', uid))),
+    getDocs(query(collection(db, 'motorcycles'), where('userId', '==', uid))),
+  ]);
+
+  let deletedRemindersCount = 0;
+  for (const remDoc of remindersSnap.docs) {
+    await deleteDoc(remDoc.ref);
+    deletedRemindersCount++;
+  }
+
+  let deletedServiceRecordsCount = 0;
+  for (const recDoc of recordsSnap.docs) {
+    await deleteDoc(recDoc.ref);
+    deletedServiceRecordsCount++;
+  }
+
+  let deletedPaymentSubmissionsCount = 0;
+  const pendingSubmissionDocs = paymentsSnap.docs.filter(
+    (d) => d.data()?.status === 'pending_approval'
+  );
+  for (const payDoc of pendingSubmissionDocs) {
+    const batch = writeBatch(db);
+    batch.delete(payDoc.ref);
+    batch.set(
+      doc(db, 'users', uid),
+      {
+        pendingSubmissionId: null,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    await batch.commit();
+    deletedPaymentSubmissionsCount++;
+  }
+
+  // Delete motorcycles via atomic deleteMotorcycleFromFirestore (with deleteReminders: false since already deleted above) so bikeCount reaches 0
+  let deletedMotorcyclesCount = 0;
+  for (const bikeDoc of motorcyclesSnap.docs) {
+    await deleteMotorcycleFromFirestore(bikeDoc.id, uid, {
+      deleteReminders: false,
+      deleteServiceHistoryConfirmed: false,
+    });
+    deletedMotorcyclesCount++;
+  }
+
+  // (c) Delete the user doc only after bikeCount is 0
+  await deleteDoc(doc(db, 'users', uid));
+
+  // (d) Call deleteUser last
+  await deleteCurrentAuthUser(targetUser as User);
+
+  // Purge local device caches for the deleted account
+  purgeDeletedUserAccountLocalData(uid, email);
+
+  return {
+    deletedUid: uid,
+    releasedEmail: email,
+    deletedMotorcyclesCount,
+    deletedRemindersCount,
+    deletedServiceRecordsCount,
+    deletedPaymentSubmissionsCount,
+  };
+}
+
+/**
+ * Submits a GCash / GoTyme Payment Reference for Admin Verification.
+ * - Requires verified email (`emailVerified == true`).
+ * - Validates reference format (8–64 alphanumeric chars after normalization).
+ * - Does NOT pre-read `/paymentReferences/{refHash}` (since `get` is admin-only).
+ * - Atomically writes `/paymentReferences/{refHash}` (with `submissionId`), `/paymentSubmissions/{submissionId}`,
+ *   and sets `pendingSubmissionId: submissionId` on `/users/{uid}` in a single transaction.
+ * - Maps duplicate reference permission errors to `"This reference number has already been submitted."`
+ */
+export async function submitPaymentReferenceToFirestore(submission: {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  bikeModel: string;
+  bikePlate?: string;
+  paymentMethod: PaymentProvider;
+  referenceNumber: string;
+  amountPhp?: number;
+  notes?: string;
+}): Promise<string> {
+  const currentUser = auth.currentUser;
+  if (currentUser && currentUser.uid === submission.userId && !currentUser.emailVerified) {
+    throw new Error('Please verify your email address before submitting a payment reference.');
+  }
+
+  const validation = validatePaymentReferenceNumber(submission.referenceNumber);
+  if (!validation.valid) {
+    throw new Error(validation.error || 'Please enter a valid payment reference number.');
+  }
+
+  const refHash = await computeReferenceHash(validation.trimmed);
+  const submissionId = `pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const submissionPath = `paymentSubmissions/${submissionId}`;
+
+  try {
+    const reservationRef = doc(db, 'paymentReferences', refHash);
+    const submissionRef = doc(db, 'paymentSubmissions', submissionId);
+    const userRef = doc(db, 'users', submission.userId);
+
+    await runTransaction(db, async (transaction) => {
+      const userSnap = await transaction.get(userRef);
+      if (userSnap.exists()) {
+        const userData = userSnap.data();
+        if (userData?.pendingSubmissionId) {
+          throw new Error(
+            'You already have a payment reference pending verification. Please wait for admin review.'
+          );
+        }
+      }
+
+      const timestamp = new Date().toISOString();
+      const newSubmission: Record<string, any> = stripUndefined({
+        id: submissionId,
+        userId: submission.userId,
+        userEmail: (submission.userEmail || '').trim().slice(0, 200),
+        userName: (submission.userName || 'MotoCare Rider').trim().slice(0, 200),
+        bikeModel: (submission.bikeModel || 'Motorcycle').trim().slice(0, 200),
+        bikePlate: submission.bikePlate ? submission.bikePlate.trim().slice(0, 200) : undefined,
+        paymentMethod: submission.paymentMethod,
+        referenceNumber: validation.trimmed,
+        referenceHash: refHash,
+        amountPhp: 49,
+        status: 'pending_approval',
+        submittedAt: timestamp,
+        notes: submission.notes ? submission.notes.trim().slice(0, 200) : undefined,
       });
-      callback(items);
+
+      transaction.set(reservationRef, {
+        id: refHash,
+        status: 'reserved',
+        createdAt: timestamp,
+        submissionId,
+      });
+
+      transaction.set(submissionRef, newSubmission);
+
+      if (userSnap.exists()) {
+        transaction.update(userRef, {
+          pendingSubmissionId: submissionId,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        transaction.set(userRef, {
+          id: submission.userId,
+          uid: submission.userId,
+          email: (submission.userEmail || '').trim().toLowerCase().slice(0, 200),
+          displayName: (submission.userName || 'MotoCare Rider').trim().slice(0, 200),
+          photoURL: '',
+          role: 'rider',
+          subscriptionTier: 'free',
+          subscriptionStatus: 'free',
+          paymentStatus: 'unpaid_free',
+          bikeCount: 0,
+          pendingSubmissionId: submissionId,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
+
+    return submissionId;
+  } catch (error: any) {
+    const msg = String(error?.message || '');
+    if (
+      msg.includes('already have a payment reference pending') ||
+      msg.includes('Please verify your email') ||
+      msg.includes('reference number')
+    ) {
+      throw error;
+    }
+    if (
+      error?.code === 'permission-denied' ||
+      msg.includes('Missing or insufficient permissions') ||
+      msg.includes('PERMISSION_DENIED')
+    ) {
+      throw new Error('This reference number has already been submitted.');
+    }
+    handleFirestoreError(error, OperationType.CREATE, submissionPath);
+  }
+}
+
+/**
+ * Admin Action: Approves a payment submission in Firestore and activates/extends Pro for 1 calendar month.
+ * Also clears `pendingSubmissionId: null` on `/users/{userId}`.
+ */
+export async function approveProAccessInFirestore(
+  submissionId: string,
+  userId: string,
+  adminEmail: string
+): Promise<{ expiryIso: string; anchorDay: number }> {
+  const path = `paymentSubmissions/${submissionId}`;
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      const subRef = doc(db, 'paymentSubmissions', submissionId);
+      const subSnap = await transaction.get(subRef);
+
+      if (!subSnap.exists()) {
+        throw new Error('Payment submission not found.');
+      }
+
+      const subData = subSnap.data() as PaymentSubmissionRecord;
+      if (subData.status !== 'pending_approval') {
+        throw new Error(
+          `This payment submission has already been reviewed (status: ${subData.status}).`
+        );
+      }
+
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await transaction.get(userRef);
+      const userData = userSnap.exists() ? userSnap.data() : null;
+
+      const approvalNow = new Date();
+      const approvalIso = approvalNow.toISOString();
+      const approvalTimestamp = Timestamp.fromDate(approvalNow);
+
+      const currentExpiryDate = parseExpiryToDate(userData?.expiryDate);
+      const isEarlyRenewal =
+        userData?.subscriptionTier === 'pro' &&
+        currentExpiryDate !== null &&
+        currentExpiryDate.getTime() > approvalNow.getTime();
+
+      const baseDate = isEarlyRenewal && currentExpiryDate ? currentExpiryDate : approvalNow;
+      const existingAnchorDay =
+        isEarlyRenewal && typeof userData?.billingAnchorDay === 'number'
+          ? userData.billingAnchorDay
+          : getManilaDay(approvalNow);
+
+      const { expiryIso, expiryTimestamp, anchorDay } = calculateNextMonthlyExpiry(
+        baseDate,
+        existingAnchorDay
+      );
+
+      const startTimestamp =
+        isEarlyRenewal && userData?.subscriptionStartDate instanceof Timestamp
+          ? userData.subscriptionStartDate
+          : approvalTimestamp;
+
+      transaction.update(subRef, {
+        status: 'active_pro',
+        reviewedAt: approvalIso,
+        reviewedBy: adminEmail,
+      });
+
+      transaction.set(
+        userRef,
+        {
+          id: userId,
+          uid: userId,
+          subscriptionTier: 'pro',
+          subscriptionStatus: 'active',
+          paymentStatus: 'active_pro',
+          subscriptionStartDate: startTimestamp,
+          expiryDate: expiryTimestamp,
+          billingAnchorDay: anchorDay,
+          lastPaymentId: submissionId,
+          pendingSubmissionId: null,
+          approvedAt: approvalIso,
+          approvedBy: adminEmail,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      if (subData.referenceHash) {
+        const refDoc = doc(db, 'paymentReferences', subData.referenceHash);
+        transaction.set(
+          refDoc,
+          {
+            id: subData.referenceHash,
+            status: 'approved',
+            approvedAt: approvalIso,
+          },
+          { merge: true }
+        );
+      }
+
+      return { expiryIso, anchorDay };
+    });
+
+    return result;
+  } catch (error: any) {
+    if (error?.message?.includes('already been reviewed')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+/**
+ * Admin Action: Rejects a pending payment submission OR revokes Pro access in Firestore.
+ * Also clears `pendingSubmissionId: null` on `/users/{userId}`.
+ */
+export async function revokeProAccessInFirestore(
+  submissionId: string | null,
+  userId: string,
+  adminEmail: string
+): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    await runTransaction(db, async (transaction) => {
+      const nowIso = new Date().toISOString();
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await transaction.get(userRef);
+      const userData = userSnap.exists() ? userSnap.data() : null;
+
+      if (submissionId) {
+        const subRef = doc(db, 'paymentSubmissions', submissionId);
+        const subSnap = await transaction.get(subRef);
+
+        if (subSnap.exists()) {
+          const subData = subSnap.data() as PaymentSubmissionRecord;
+
+          transaction.update(subRef, {
+            status: 'rejected',
+            reviewedAt: nowIso,
+            reviewedBy: adminEmail,
+          });
+
+          if (subData.referenceHash) {
+            const refDoc = doc(db, 'paymentReferences', subData.referenceHash);
+            transaction.set(
+              refDoc,
+              {
+                id: subData.referenceHash,
+                status: 'rejected',
+                rejectedAt: nowIso,
+              },
+              { merge: true }
+            );
+          }
+
+          if (subData.status === 'pending_approval') {
+            const currentExpiry = parseExpiryToDate(userData?.expiryDate);
+            const hasActivePro =
+              userData?.subscriptionTier === 'pro' &&
+              currentExpiry !== null &&
+              currentExpiry.getTime() > Date.now();
+
+            if (!hasActivePro) {
+              transaction.set(
+                userRef,
+                {
+                  id: userId,
+                  uid: userId,
+                  subscriptionTier: 'free',
+                  subscriptionStatus: 'free',
+                  paymentStatus: 'rejected',
+                  pendingSubmissionId: null,
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+            } else {
+              transaction.set(
+                userRef,
+                {
+                  id: userId,
+                  uid: userId,
+                  pendingSubmissionId: null,
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+            return;
+          }
+        }
+      }
+
+      transaction.set(
+        userRef,
+        {
+          id: userId,
+          uid: userId,
+          subscriptionTier: 'free',
+          subscriptionStatus: 'revoked',
+          paymentStatus: 'rejected',
+          expiryDate: Timestamp.fromDate(new Date(0)),
+          pendingSubmissionId: null,
+          revokedAt: nowIso,
+          revokedBy: adminEmail,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+function normalizeIncomingDocTimestamps<T extends Record<string, any>>(raw: T): T {
+  const clone: Record<string, any> = { ...raw };
+  if (clone.updatedAt) {
+    const iso = normalizeFirestoreTimestampToIso(clone.updatedAt);
+    if (iso) clone.updatedAt = iso;
+  }
+  if (clone.createdAt) {
+    const iso = normalizeFirestoreTimestampToIso(clone.createdAt);
+    if (iso) clone.createdAt = iso;
+  }
+  return clone as T;
+}
+
+/**
+ * Real-time listener for a user's Motorcycles
+ */
+export function subscribeToUserMotorcycles(
+  userId: string,
+  callback: (bikes: Motorcycle[]) => void
+): () => void {
+  const q = query(collection(db, 'motorcycles'), where('userId', '==', userId));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const bikes: Motorcycle[] = [];
+      snapshot.forEach((docSnap) => {
+        const normalized = normalizeIncomingDocTimestamps(docSnap.data() as Motorcycle);
+        bikes.push(normalized);
+        if (normalized.updatedAt) {
+          recordKnownCloudVersion(
+            userId,
+            'motorcycle',
+            normalized.id,
+            normalized.updatedAt,
+            normalized.cloudVersion
+          );
+        }
+      });
+      callback(bikes);
     },
     (error) => {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Prevent uncaught listener throw in offline mode
-      }
+      console.warn('Motorcycles snapshot listener error:', error);
     }
   );
 }
 
+/**
+ * Real-time listener for a user's Reminders
+ */
+export function subscribeToUserReminders(
+  userId: string,
+  callback: (reminders: MaintenanceReminder[]) => void
+): () => void {
+  const q = query(collection(db, 'reminders'), where('userId', '==', userId));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const rems: MaintenanceReminder[] = [];
+      snapshot.forEach((docSnap) => {
+        const normalized = normalizeIncomingDocTimestamps(docSnap.data() as MaintenanceReminder);
+        rems.push(normalized);
+        if (normalized.updatedAt) {
+          recordKnownCloudVersion(
+            userId,
+            'reminder',
+            normalized.id,
+            normalized.updatedAt,
+            normalized.cloudVersion
+          );
+        }
+      });
+      callback(rems);
+    },
+    (error) => {
+      console.warn('Reminders snapshot listener error:', error);
+    }
+  );
+}
+
+/**
+ * Real-time listener for a user's Service Records
+ */
+export function subscribeToUserServiceRecords(
+  userId: string,
+  callback: (records: ServiceRecord[]) => void
+): () => void {
+  const q = query(collection(db, 'serviceRecords'), where('userId', '==', userId));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const recs: ServiceRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        const normalized = normalizeIncomingDocTimestamps(docSnap.data() as ServiceRecord);
+        recs.push(normalized);
+        if (normalized.updatedAt) {
+          recordKnownCloudVersion(
+            userId,
+            'serviceRecord',
+            normalized.id,
+            normalized.updatedAt,
+            normalized.cloudVersion
+          );
+        }
+      });
+      recs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      callback(recs);
+    },
+    (error) => {
+      console.warn('Service records snapshot listener error:', error);
+    }
+  );
+}
+
+/**
+ * One-shot fetch of a user's Motorcycles from Firestore
+ */
+export async function fetchUserMotorcyclesOnce(userId: string): Promise<Motorcycle[]> {
+  const q = query(collection(db, 'motorcycles'), where('userId', '==', userId));
+  const snap = await getDocs(q);
+  const bikes: Motorcycle[] = [];
+  snap.forEach((docSnap) => {
+    bikes.push(normalizeIncomingDocTimestamps(docSnap.data() as Motorcycle));
+  });
+  return bikes;
+}
+
+/**
+ * One-shot fetch of a user's Maintenance Reminders from Firestore
+ */
+export async function fetchUserRemindersOnce(userId: string): Promise<MaintenanceReminder[]> {
+  const q = query(collection(db, 'reminders'), where('userId', '==', userId));
+  const snap = await getDocs(q);
+  const rems: MaintenanceReminder[] = [];
+  snap.forEach((docSnap) => {
+    rems.push(normalizeIncomingDocTimestamps(docSnap.data() as MaintenanceReminder));
+  });
+  return rems;
+}
+
+/**
+ * One-shot fetch of a user's Service Records from Firestore
+ */
+export async function fetchUserServiceRecordsOnce(userId: string): Promise<ServiceRecord[]> {
+  const q = query(collection(db, 'serviceRecords'), where('userId', '==', userId));
+  const snap = await getDocs(q);
+  const recs: ServiceRecord[] = [];
+  snap.forEach((docSnap) => {
+    recs.push(normalizeIncomingDocTimestamps(docSnap.data() as ServiceRecord));
+  });
+  recs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return recs;
+}
+
+/**
+ * Real-time listener for a user's own Subscription status on `/users/{userId}`
+ */
+export function subscribeToUserProfile(
+  userId: string,
+  callback: (profile: any) => void
+): () => void {
+  const userRef = doc(db, 'users', userId);
+  return onSnapshot(
+    userRef,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        callback(docSnap.data());
+      } else {
+        callback(null);
+      }
+    },
+    (error) => {
+      console.warn('User profile listener error:', error);
+    }
+  );
+}
+
+/**
+ * Real-time listener for a user's own Payment Submissions
+ */
+export function subscribeToUserPaymentSubmissions(
+  userId: string,
+  callback: (submissions: PaymentSubmissionRecord[]) => void
+): () => void {
+  const q = query(collection(db, 'paymentSubmissions'), where('userId', '==', userId));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const subs: PaymentSubmissionRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        subs.push(docSnap.data() as PaymentSubmissionRecord);
+      });
+      subs.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      callback(subs);
+    },
+    (error) => {
+      console.warn('User payment submissions listener error:', error);
+    }
+  );
+}
+
+/**
+ * Admin Real-Time Listener: Listens ONLY to pending Payment Submissions (`status == 'pending_approval'`)
+ * to protect the free Spark plan 50K daily read quota.
+ */
+export function subscribeToAllPaymentSubmissions(
+  callback: (submissions: PaymentSubmissionRecord[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'paymentSubmissions'),
+    where('status', '==', 'pending_approval')
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: PaymentSubmissionRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push(docSnap.data() as PaymentSubmissionRecord);
+      });
+      list.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+      callback(list);
+    },
+    (error) => {
+      console.warn('Admin payment submissions listener error:', error);
+    }
+  );
+}
+
+/**
+ * Admin On-Demand Fetch: Loads reviewed payment submissions (`active_pro` or `rejected`) with `limit(100)`
+ * when the admin explicitly switches to a reviewed status tab or clicks Refresh.
+ */
+export async function fetchReviewedPaymentSubmissionsOnce(
+  statusFilter: 'active_pro' | 'rejected',
+  maxCount = 100
+): Promise<PaymentSubmissionRecord[]> {
+  const constraints: any[] = [where('status', '==', statusFilter)];
+  if (typeof limit === 'function') {
+    constraints.push(limit(maxCount));
+  }
+  const q = query(collection(db, 'paymentSubmissions'), ...constraints);
+  const snap = await getDocs(q);
+  const list: PaymentSubmissionRecord[] = [];
+  snap.forEach((docSnap) => {
+    list.push(docSnap.data() as PaymentSubmissionRecord);
+  });
+  list.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+  return list;
+}
+
+/**
+ * Admin On-Demand Paginated User Fetch:
+ * Uses `getDocs` with `limit(pageSize)` (default 100) and optional `startAfter(lastDoc)` cursor
+ * instead of an unbounded real-time `onSnapshot` over all users.
+ */
+export async function fetchAdminUsersPage(
+  pageSize = 100,
+  lastDoc?: QueryDocumentSnapshot<DocumentData> | null
+): Promise<{
+  users: any[];
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
+}> {
+  const colRef = collection(db, 'users');
+  const constraints: any[] = [];
+  if (lastDoc && typeof startAfter === 'function') {
+    constraints.push(startAfter(lastDoc));
+  }
+  if (typeof limit === 'function') {
+    constraints.push(limit(pageSize));
+  }
+  const q = constraints.length > 0 ? query(colRef, ...constraints) : query(colRef);
+  const snap = await getDocs(q);
+  const users: any[] = [];
+  snap.forEach((docSnap) => {
+    users.push(docSnap.data());
+  });
+  const nextCursor = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+  return {
+    users,
+    lastDoc: nextCursor,
+    hasMore: snap.docs.length === pageSize,
+  };
+}
+
+export interface BikeCountReconciliationItem {
+  userId: string;
+  email: string;
+  previousBikeCount: number | undefined;
+  actualBikeCount: number;
+  needsUpdate: boolean;
+}
+
+export interface BikeCountReconciliationReport {
+  dryRun: boolean;
+  totalUsersScanned: number;
+  discrepanciesFound: number;
+  usersUpdated: number;
+  items: BikeCountReconciliationItem[];
+}
+
+/**
+ * Admin Migration & Reconciliation Utility:
+ * Audits `/users/{userId}.bikeCount` against actual `/motorcycles` documents owned by that user.
+ */
+export async function reconcileAllUserBikeCounts(
+  dryRun = true
+): Promise<BikeCountReconciliationReport> {
+  const usersSnap = await getDocs(query(collection(db, 'users'), limit(500)));
+  const bikesSnap = await getDocs(query(collection(db, 'motorcycles'), limit(1000)));
+
+  const actualCountsByUser = new Map<string, number>();
+  bikesSnap.forEach((bikeDoc) => {
+    const data = bikeDoc.data();
+    const uid = data?.userId;
+    if (typeof uid === 'string' && uid.length > 0) {
+      actualCountsByUser.set(uid, (actualCountsByUser.get(uid) || 0) + 1);
+    }
+  });
+
+  const items: BikeCountReconciliationItem[] = [];
+  let discrepanciesFound = 0;
+  let usersUpdated = 0;
+
+  let batch = writeBatch(db);
+  let batchOpCount = 0;
+
+  for (const userDoc of usersSnap.docs) {
+    const userData = userDoc.data();
+    const uid = userDoc.id;
+    const prevCount = typeof userData.bikeCount === 'number' ? userData.bikeCount : undefined;
+    const actualCount = actualCountsByUser.get(uid) || 0;
+    const needsUpdate = prevCount !== actualCount;
+
+    items.push({
+      userId: uid,
+      email: userData.email || uid,
+      previousBikeCount: prevCount,
+      actualBikeCount: actualCount,
+      needsUpdate,
+    });
+
+    if (needsUpdate) {
+      discrepanciesFound++;
+      if (!dryRun) {
+        const userRef = doc(db, 'users', uid);
+        batch.update(userRef, {
+          bikeCount: actualCount,
+          updatedAt: serverTimestamp(),
+        });
+        batchOpCount++;
+        usersUpdated++;
+
+        if (batchOpCount >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          batchOpCount = 0;
+        }
+      }
+    }
+  }
+
+  if (!dryRun && batchOpCount > 0) {
+    await batch.commit();
+  }
+
+  return {
+    dryRun,
+    totalUsersScanned: usersSnap.size,
+    discrepanciesFound,
+    usersUpdated,
+    items,
+  };
+}
+
+/**
+ * Reconciles a single user's `bikeCount` against their actual `/motorcycles` documents.
+ */
+export async function reconcileUserBikeCount(
+  userId: string,
+  dryRun = false
+): Promise<BikeCountReconciliationItem> {
+  const userRef = doc(db, 'users', userId);
+  const userSnap = await getDoc(userRef);
+  const bikesQuery = query(collection(db, 'motorcycles'), where('userId', '==', userId));
+  const bikesSnap = await getDocs(bikesQuery);
+
+  const actualCount = bikesSnap.size;
+  const userData = userSnap.exists() ? userSnap.data() : null;
+  const prevCount =
+    userData && typeof userData.bikeCount === 'number' ? userData.bikeCount : undefined;
+  const needsUpdate = prevCount !== actualCount;
+
+  if (needsUpdate && !dryRun && userSnap.exists()) {
+    await updateDoc(userRef, {
+      bikeCount: actualCount,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  return {
+    userId,
+    email: userData?.email || userId,
+    previousBikeCount: prevCount,
+    actualBikeCount: actualCount,
+    needsUpdate,
+  };
+}

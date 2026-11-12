@@ -8,6 +8,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: [
+      'src/tests/accountDeletion.test.ts',
+      'src/tests/**/*.test.{ts,tsx}',
       'tests/adminFooterLink.test.tsx',
       'tests/preBetaSecurityAndCleanup.test.tsx',
       'tests/cloudSyncAndMigration.test.tsx',

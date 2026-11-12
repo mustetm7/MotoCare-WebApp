@@ -55,7 +55,10 @@ import {
   SAFE_BATCH_TRANSACTION_CHUNK_SIZE,
   SAFE_CLEANUP_DELETE_BATCH_CHUNK_SIZE,
   resolveNextCloudVersionForUpdate,
+  permanentlyDeleteUserAccount,
+  syncUserProfile,
 } from '../src/utils/firestoreService';
+import { computeAuthoritativeSubscription } from '../src/context/AuthContext';
 import {
   LegacyMigrationModal,
   buildConflictFieldDiffs,
@@ -2986,8 +2989,183 @@ describe('MotoCare Cloud Synchronization & Safe Migration — 16 Regression Scen
       expect(inMemoryFirestore.reminders.size).toBe(0);
       expect(inMemoryFirestore.serviceRecords.size).toBe(0);
     });
+
+    it('9. User Can Return Anytime After Permanent Deletion: permanently deletes old account & data, releases email for re-registration with a new UID, starts on Free tier, and restores no old motorcycles/reminders/service history', async () => {
+      const returningEmail = 'returning.rider@motocare.ph';
+      const oldUid = 'uid-deleted-rider-001';
+      const newUid = 'uid-re-registered-rider-002';
+
+      // In-memory Firebase Auth registry simulating real email uniqueness & release upon deleteUser()
+      const activeAuthAccountsByEmail = new Map<string, { uid: string; email: string }>();
+      activeAuthAccountsByEmail.set(returningEmail, { uid: oldUid, email: returningEmail });
+
+      const oldAuthUser = {
+        uid: oldUid,
+        email: returningEmail,
+        displayName: 'Juan Dela Cruz (Old Account)',
+        emailVerified: true,
+        delete: vi.fn(async () => {
+          activeAuthAccountsByEmail.delete(returningEmail);
+        }),
+      };
+
+      // 1. Seed the old user with active Pro status, 2 motorcycles, 3 reminders, and 2 service records
+      inMemoryFirestore.users.set(oldUid, {
+        id: oldUid,
+        uid: oldUid,
+        email: returningEmail,
+        displayName: 'Juan Dela Cruz (Old Account)',
+        role: 'rider',
+        subscriptionTier: 'pro',
+        subscriptionStatus: 'active',
+        paymentStatus: 'active_pro',
+        expiryDate: new Date(Date.now() + 25 * 86400_000).toISOString(),
+        bikeCount: 2,
+      });
+
+      const oldBike1 = createSampleBike({
+        id: 'old-bike-1',
+        userId: oldUid,
+        brand: 'Yamaha',
+        model: 'NMAX 155',
+        odometer: 14200,
+      });
+      const oldBike2 = createSampleBike({
+        id: 'old-bike-2',
+        userId: oldUid,
+        brand: 'Honda',
+        model: 'ADV 160',
+        odometer: 6800,
+      });
+      await saveMotorcycleToFirestore(oldBike1, oldUid);
+      await saveMotorcycleToFirestore(oldBike2, oldUid);
+
+      const oldRem1 = createSampleReminder({
+        id: 'old-rem-1',
+        userId: oldUid,
+        bikeId: 'old-bike-1',
+        title: 'Engine Oil Change',
+      });
+      const oldRem2 = createSampleReminder({
+        id: 'old-rem-2',
+        userId: oldUid,
+        bikeId: 'old-bike-1',
+        title: 'CVT Cleaning',
+      });
+      const oldRem3 = createSampleReminder({
+        id: 'old-rem-3',
+        userId: oldUid,
+        bikeId: 'old-bike-2',
+        title: 'Brake Fluid Flush',
+      });
+      await saveRemindersBatchToFirestore([oldRem1, oldRem2, oldRem3], oldUid);
+
+      const oldRec1 = createSampleRecord({
+        id: 'old-rec-1',
+        userId: oldUid,
+        bikeId: 'old-bike-1',
+        title: '12,000 km Major PMS',
+      });
+      const oldRec2 = createSampleRecord({
+        id: 'old-rec-2',
+        userId: oldUid,
+        bikeId: 'old-bike-2',
+        title: '6,000 km Oil & Filter Service',
+      });
+      await saveServiceRecordsBatchToFirestore([oldRec1, oldRec2], oldUid);
+
+      // Seed UID-scoped and unscoped local storage caches as if the old user was actively using the browser
+      saveUserScopedMotorcycles(oldUid, [oldBike1, oldBike2]);
+      saveUserScopedReminders(oldUid, [oldRem1, oldRem2, oldRem3]);
+      saveUserScopedServiceRecords(oldUid, [oldRec1, oldRec2]);
+      localStorage.setItem('motocare_motorcycles_v4', JSON.stringify([oldBike1, oldBike2]));
+      localStorage.setItem('motocare_reminders_v4', JSON.stringify([oldRem1, oldRem2, oldRem3]));
+      localStorage.setItem('motocare_records_v4', JSON.stringify([oldRec1, oldRec2]));
+
+      // 2. Permanently delete the old user account
+      const deleteResult = await permanentlyDeleteUserAccount(oldAuthUser);
+      expect(deleteResult.deletedUid).toBe(oldUid);
+      expect(deleteResult.releasedEmail).toBe(returningEmail);
+      expect(deleteResult.deletedMotorcyclesCount).toBe(2);
+      expect(deleteResult.deletedRemindersCount).toBe(3);
+      expect(deleteResult.deletedServiceRecordsCount).toBe(2);
+
+      // Verify old Firestore records and profile are permanently removed
+      expect(inMemoryFirestore.users.has(oldUid)).toBe(false);
+      expect(inMemoryFirestore.motorcycles.has('old-bike-1')).toBe(false);
+      expect(inMemoryFirestore.motorcycles.has('old-bike-2')).toBe(false);
+      expect(inMemoryFirestore.reminders.size).toBe(0);
+      expect(inMemoryFirestore.serviceRecords.size).toBe(0);
+
+      // Verify old UID-scoped and unscoped local caches are purged and NO blacklist exists
+      expect(loadUserScopedMotorcycles(oldUid)).toHaveLength(0);
+      expect(loadUserScopedReminders(oldUid)).toHaveLength(0);
+      expect(loadUserScopedServiceRecords(oldUid)).toHaveLength(0);
+      expect(localStorage.getItem('motocare_motorcycles_v4')).toBeNull();
+
+      // 3. Re-register using the SAME email address -> receives a NEW UID
+      expect(activeAuthAccountsByEmail.has(returningEmail)).toBe(false); // Email was released
+      activeAuthAccountsByEmail.set(returningEmail, { uid: newUid, email: returningEmail });
+      expect(newUid).not.toBe(oldUid);
+
+      const newAuthUser = {
+        uid: newUid,
+        email: returningEmail,
+        displayName: 'Juan Dela Cruz',
+        emailVerified: false,
+      } as any;
+
+      await syncUserProfile(newAuthUser);
+
+      // 4. Verify the new account starts with normal Free-tier benefits and limits
+      const newUserDoc = inMemoryFirestore.users.get(newUid);
+      expect(newUserDoc).toBeDefined();
+      expect(newUserDoc?.uid).toBe(newUid);
+      expect(newUserDoc?.email).toBe(returningEmail);
+      expect(newUserDoc?.subscriptionTier).toBe('free');
+      expect(newUserDoc?.subscriptionStatus).toBe('free');
+      expect(newUserDoc?.paymentStatus).toBe('unpaid_free');
+      expect(newUserDoc?.bikeCount).toBe(0);
+
+      const newSub = computeAuthoritativeSubscription(newUserDoc || null, null);
+      expect(newSub.tier).toBe('free');
+      expect(newSub.status).toBe('free');
+
+      // 5. Hydrate the new account and verify NO old motorcycles, reminders, or service history are restored
+      let hydratedBikes: Motorcycle[] = [];
+      let hydratedReminders: MaintenanceReminder[] = [];
+      let hydratedRecords: ServiceRecord[] = [];
+      let hydratedActiveId = '';
+
+      const { result } = renderHook(() =>
+        useHydrateUserData({
+          user: { uid: newUid, email: returningEmail },
+          hasProAccess: false,
+          setMotorcycles: (val) => {
+            hydratedBikes = typeof val === 'function' ? val(hydratedBikes) : val;
+          },
+          setReminders: (val) => {
+            hydratedReminders = typeof val === 'function' ? val(hydratedReminders) : val;
+          },
+          setServiceRecords: (val) => {
+            hydratedRecords = typeof val === 'function' ? val(hydratedRecords) : val;
+          },
+          setActiveBikeId: (val) => {
+            hydratedActiveId = typeof val === 'function' ? val(hydratedActiveId) : val;
+          },
+        })
+      );
+
+      expect(hydratedBikes).toHaveLength(0);
+      expect(hydratedReminders).toHaveLength(0);
+      expect(hydratedRecords).toHaveLength(0);
+      expect(hydratedActiveId).toBe('');
+      expect(result.current.isMigrationModalOpen).toBe(false);
+      expect(result.current.migrationDryRun).toBeNull();
+    });
   });
 });
+
 
 
 

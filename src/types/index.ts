@@ -7,6 +7,7 @@ export type ServiceCategory =
   | 'Gear Oil'
   | 'CVT & Belt'
   | 'Drive Chain'
+  | 'Chain & Sprockets'
   | 'Brakes'
   | 'Spark Plug'
   | 'Coolant'
@@ -137,10 +138,19 @@ export interface PreRideItem {
   checked: boolean;
 }
 
-export type ActiveTab = 'garage' | 'reminders' | 'logbook' | 'gps-ride' | 'lto' | 'analytics';
+export type ActiveTab =
+  | 'garage'
+  | 'reminders'
+  | 'logbook'
+  | 'history'
+  | 'gps-ride'
+  | 'lto'
+  | 'preride'
+  | 'analytics';
 
 export type UserSubscriptionTier = 'free' | 'pro';
 export type PaymentMethod = 'gcash' | 'gotyme' | 'maribank' | 'maya' | 'card';
+export type PaymentProvider = PaymentMethod;
 
 export interface UserSubscription {
   tier: UserSubscriptionTier;
@@ -166,6 +176,7 @@ export interface UserAccount {
   name: string;
   email: string;
   registeredAt: string;
+  submittedAt?: string;
   bikeModel: string;
   bikeNickname?: string;
   bikePlate?: string;
@@ -187,6 +198,26 @@ export interface UserAccount {
   hasPendingRenewal?: boolean;
   approvedAt?: string;
   approvedBy?: string;
+  notes?: string;
+}
+
+export type UserAccountRecord = UserAccount;
+
+export interface PaymentSubmissionRecord {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  bikeModel: string;
+  bikePlate?: string;
+  paymentMethod: PaymentProvider;
+  referenceNumber: string;
+  referenceHash?: string;
+  amountPhp: number;
+  status: 'pending_approval' | 'active_pro' | 'rejected';
+  submittedAt: any;
+  reviewedAt?: any;
+  reviewedBy?: string;
   notes?: string;
 }
 

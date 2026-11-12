@@ -124,3 +124,23 @@ export async function testOverdueAlert(): Promise<boolean> {
   return true;
 }
 
+const notifiedOverdueKeys = new Set<string>();
+
+/**
+ * Checks a bike's reminders for overdue items and triggers an alert once per overdue milestone.
+ */
+export function checkAndTriggerOverdueNotifications(
+  bike: Motorcycle,
+  reminders: MaintenanceReminder[]
+): void {
+  if (!bike || !Array.isArray(reminders)) return;
+  for (const rem of reminders) {
+    const remainingKm = rem.nextDueOdo - bike.odometer;
+    const key = `${bike.id}:${rem.id}:${rem.nextDueOdo}`;
+    if (remainingKm <= 0 && !notifiedOverdueKeys.has(key)) {
+      notifiedOverdueKeys.add(key);
+      triggerOverdueAlert(rem, bike, remainingKm);
+    }
+  }
+}
+

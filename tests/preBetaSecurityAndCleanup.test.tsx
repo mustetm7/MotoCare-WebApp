@@ -18,6 +18,10 @@ import {
   loadUserScopedMotorcycles,
   saveUserScopedMotorcycles,
   loadUserScopedReminders,
+  saveUserScopedReminders,
+  loadUserScopedServiceRecords,
+  saveUserScopedServiceRecords,
+  purgeDeletedUserAccountLocalData,
   exportServiceAndMaintenanceCsv,
   exportServiceAndMaintenancePdf,
   generatePrintableMaintenancePdfReport,
@@ -1974,7 +1978,245 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
     expect(proSaveSecondBikeMock.mock.calls[0][0].motorcycleType).toBe('Standard');
     unmountProModal();
   });
+
+  // ---------------------------------------------------------------------------
+  // TEST T: User Can Return Anytime After Permanent Deletion
+  // ---------------------------------------------------------------------------
+  it('Test T: A permanently deleted user can register again anytime with the same email address, receives a new UID, starts with normal Free-tier limits, and has no old motorcycles, reminders, or service history restored', async () => {
+    const targetEmail = 'rider.return@motocare.ph';
+    const originalUid = 'uid-original-account-101';
+    const newFreshUid = 'uid-fresh-account-202';
+
+    // Simulated Firebase Auth email registry verifying that deleting the old account releases the email
+    const firebaseAuthEmailIndex = new Map<string, string>([[targetEmail, originalUid]]);
+
+    // 1. Seed the original user's motorcycles, maintenance reminders, and service history
+    const oldBikes = [
+      {
+        id: 'old-bike-nmax',
+        userId: originalUid,
+        nickname: 'Old NMAX',
+        brand: 'Yamaha',
+        model: 'NMAX 155',
+        year: 2023,
+        licensePlate: 'NAA 9999',
+        odometer: 18500,
+        unit: 'km' as const,
+        color: 'Matte Black',
+        specs: {
+          transmission: 'Automatic Scooter' as const,
+          cooling: 'Liquid-Cooled' as const,
+          displacementCc: 155,
+          oilViscosity: '10W-40',
+          oilCapacityLiters: 0.9,
+          tirePressureFrontPsi: 29,
+          tirePressureRearPsi: 33,
+          recommendedServiceIntervalKm: 1500,
+        },
+      },
+    ];
+    const oldReminders = [
+      {
+        id: 'old-rem-oil',
+        userId: originalUid,
+        bikeId: 'old-bike-nmax',
+        title: 'Engine Oil Change',
+        category: 'Engine Oil' as const,
+        categoryTag: 'OIL' as const,
+        intervalKm: 1500,
+        lastCompletedOdo: 17000,
+        nextDueOdo: 18500,
+        lastCompletedDate: '2026-01-10',
+        priority: 'high' as const,
+        notes: 'Use 10W-40 synthetic',
+        estimatedCostPhp: 450,
+      },
+      {
+        id: 'old-rem-cvt',
+        userId: originalUid,
+        bikeId: 'old-bike-nmax',
+        title: 'CVT Cleaning',
+        category: 'CVT & Belt' as const,
+        categoryTag: 'CVT' as const,
+        intervalKm: 4000,
+        lastCompletedOdo: 16000,
+        nextDueOdo: 20000,
+        lastCompletedDate: '2026-01-01',
+        priority: 'medium' as const,
+        notes: 'Inspect belt and rollers',
+        estimatedCostPhp: 350,
+      },
+    ];
+    const oldServiceRecords = [
+      {
+        id: 'old-rec-1',
+        userId: originalUid,
+        bikeId: 'old-bike-nmax',
+        date: '2026-01-10',
+        odometer: 17000,
+        title: 'Full PMS & Oil Change',
+        category: 'Engine Oil' as const,
+        type: 'Casa / Official 3S' as const,
+        parts: [{ name: 'Yamalube 10W-40', costPhp: 450 }],
+        laborCostPhp: 250,
+        totalCostPhp: 700,
+        notes: 'Completed at Yamaha 3S',
+      },
+    ];
+
+    saveUserScopedMotorcycles(originalUid, oldBikes);
+    saveUserScopedReminders(originalUid, oldReminders);
+    saveUserScopedServiceRecords(originalUid, oldServiceRecords);
+    localStorage.setItem('motocare_motorcycles_v4', JSON.stringify(oldBikes));
+    localStorage.setItem('motocare_reminders_v4', JSON.stringify(oldReminders));
+    localStorage.setItem('motocare_records_v4', JSON.stringify(oldServiceRecords));
+
+    let currentSessionUser: any = {
+      uid: originalUid,
+      email: targetEmail,
+      displayName: 'Original Rider',
+      emailVerified: true,
+    };
+
+    const deleteAccountMock = vi.fn(async () => {
+      // Release email in Firebase Auth and purge local data
+      firebaseAuthEmailIndex.delete(targetEmail);
+      purgeDeletedUserAccountLocalData(originalUid, targetEmail);
+      currentSessionUser = null;
+    });
+
+    vi.mocked(AuthContextModule.useAuth).mockImplementation(() => ({
+      user: currentSessionUser,
+      loading: false,
+      isAdmin: false,
+      hasProAccess: currentSessionUser?.uid === originalUid, // Old account had Pro
+      subscription:
+        currentSessionUser?.uid === originalUid
+          ? { tier: 'pro', plan: 'monthly', status: 'active' }
+          : { tier: 'free', plan: null, status: 'free' },
+      submitPaymentRef: vi.fn(),
+      signIn: vi.fn(),
+      signInWithEmail: vi.fn(),
+      signUpWithEmail: vi.fn(async (email: string, _pass: string, displayName?: string) => {
+        if (firebaseAuthEmailIndex.has(email)) {
+          throw new Error('Firebase: Error (auth/email-already-in-use).');
+        }
+        // Assign a brand-new UID for the re-registered account
+        firebaseAuthEmailIndex.set(email, newFreshUid);
+        currentSessionUser = {
+          uid: newFreshUid,
+          email,
+          displayName: displayName || 'Returning Rider',
+          emailVerified: false,
+        };
+        return currentSessionUser;
+      }),
+      resetPassword: vi.fn(),
+      signOut: vi.fn(),
+      deleteAccount: deleteAccountMock,
+    }));
+
+    const { unmount: unmountOriginalApp } = render(<App />);
+
+    // Confirm old account's motorcycle is initially displayed
+    expect(screen.getAllByText(/Old NMAX/i).length).toBeGreaterThan(0);
+
+    // 2. Trigger permanent account deletion from the User Profile menu
+    const avatarBtn = screen.getByLabelText(/Account menu for Original Rider/i);
+    fireEvent.click(avatarBtn);
+
+    const deleteAccountBtn = screen.getByTestId('profile-delete-account-btn');
+    fireEvent.click(deleteAccountBtn);
+
+    const doubleConfirmCheckbox = screen.getByTestId('delete-account-double-confirm-checkbox');
+    fireEvent.click(doubleConfirmCheckbox);
+
+    const confirmDeleteBtn = screen.getByTestId('confirm-permanent-delete-account-btn');
+    fireEvent.click(confirmDeleteBtn);
+
+    expect(deleteAccountMock).toHaveBeenCalledTimes(1);
+    expect(firebaseAuthEmailIndex.has(targetEmail)).toBe(false);
+    expect(loadUserScopedMotorcycles(originalUid)).toHaveLength(0);
+    expect(loadUserScopedReminders(originalUid)).toHaveLength(0);
+    expect(loadUserScopedServiceRecords(originalUid)).toHaveLength(0);
+    expect(loadMotorcycles()).toHaveLength(0);
+    expect(loadReminders()).toHaveLength(0);
+    expect(loadServiceRecords()).toHaveLength(0);
+
+    unmountOriginalApp();
+
+    // 3. Re-register using the SAME email address via AccountRegistrationScreen
+    const onRegisterSuccess = vi.fn();
+    const { unmount: unmountRegScreen } = render(
+      <AccountRegistrationScreen initialMode="register" onSuccess={onRegisterSuccess} />
+    );
+
+    fireEvent.change(screen.getByLabelText(/Full Name/i), {
+      target: { value: 'Returning Rider Fresh' },
+    });
+    fireEvent.change(screen.getByLabelText(/Email Address/i), {
+      target: { value: targetEmail },
+    });
+    fireEvent.change(screen.getByLabelText(/^Password$/i), {
+      target: { value: 'FreshPass123!' },
+    });
+    fireEvent.change(screen.getByLabelText(/^Confirm Password$/i), {
+      target: { value: 'FreshPass123!' },
+    });
+
+    const termsCheckbox = screen.getByRole('checkbox');
+    fireEvent.click(termsCheckbox);
+
+    const registerSubmitBtn = screen.getByRole('button', { name: /Create Account/i });
+    fireEvent.click(registerSubmitBtn);
+
+    await vi.waitFor(() => {
+      expect(onRegisterSuccess).toHaveBeenCalledTimes(1);
+    });
+    unmountRegScreen();
+
+    // 4. Verify the re-registered user received a brand-new UID
+    expect(currentSessionUser).not.toBeNull();
+    expect(currentSessionUser.email).toBe(targetEmail);
+    expect(currentSessionUser.uid).toBe(newFreshUid);
+    expect(currentSessionUser.uid).not.toBe(originalUid);
+
+    // 5. Render App with the newly registered account and confirm:
+    //    - Starts with normal Free-tier limits (1 motorcycle max, 2 reminders max)
+    //    - Zero old motorcycles, reminders, or service history are restored
+    const { unmount: unmountNewApp } = render(<App />);
+
+    expect(loadUserScopedMotorcycles(newFreshUid)).toHaveLength(0);
+    expect(loadUserScopedReminders(newFreshUid)).toHaveLength(0);
+    expect(loadUserScopedServiceRecords(newFreshUid)).toHaveLength(0);
+    expect(screen.queryByText(/Old NMAX/i)).toBeNull();
+
+    // New user sees the empty garage onboarding screen
+    expect(screen.getByTestId('post-auth-register-bike-prompt')).toBeDefined();
+    expect(screen.getByTestId('onboarding-add-custom-bike-btn')).toBeDefined();
+
+    // Verify Free-tier limits apply to the new account (1 motorcycle allowed, 2nd requires Pro upgrade)
+    expect(
+      canCreateMotorcycleInGarage({
+        authUser: currentSessionUser,
+        targetUserId: newFreshUid,
+        userDocData: { subscriptionTier: 'free', subscriptionStatus: 'free', bikeCount: 0 },
+        currentCount: 0,
+      })
+    ).toBe(true);
+    expect(
+      canCreateMotorcycleInGarage({
+        authUser: currentSessionUser,
+        targetUserId: newFreshUid,
+        userDocData: { subscriptionTier: 'free', subscriptionStatus: 'free', bikeCount: 1 },
+        currentCount: 1,
+      })
+    ).toBe(false);
+
+    unmountNewApp();
+  });
 });
+
 
 
 

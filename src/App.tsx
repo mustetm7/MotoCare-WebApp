@@ -1,15 +1,14 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
+  ActiveTab,
   Motorcycle,
   MaintenanceReminder,
   ServiceRecord,
-  ActiveTab,
-  UserSubscription,
-  PaymentMethod,
-  UserAccount,
+  PreRideItem,
+  PaymentProvider,
   CloudSyncStatus,
-  LegacyMigrationDryRun,
   SyncConflictItem,
+  LegacyMigrationDryRun,
 } from './types';
 import {
   loadMotorcycles,
@@ -20,12 +19,10 @@ import {
   saveServiceRecords,
   loadActiveBikeId,
   saveActiveBikeId,
+  loadPreRideItems,
+  savePreRideItems,
   loadQuickKmPresets,
   saveQuickKmPresets,
-  analyzeReminder,
-  loadUserAccounts,
-  saveUserAccounts,
-  INITIAL_USER_ACCOUNTS,
   loadUserScopedMotorcycles,
   saveUserScopedMotorcycles,
   loadUserScopedReminders,
@@ -34,598 +31,446 @@ import {
   saveUserScopedServiceRecords,
   loadUserScopedActiveBikeId,
   saveUserScopedActiveBikeId,
-  enqueueOfflineMutation,
-  removeOfflineMutation,
   getOfflineMutationQueue,
-  createImmutablePreMigrationBackup,
-  loadMigrationLedger,
-  skipLegacyMigrationForUser,
   inspectLegacyDataDryRun,
+  skipLegacyMigrationForUser,
   resolveMotorcycleConflict,
-  getKnownCloudVersion,
-  getKnownCloudRevision,
+  exportServiceAndMaintenanceCsv,
+  exportServiceAndMaintenancePdf,
+  generatePrintableMaintenancePdfReport,
   ThemeMode,
   loadThemePreference,
   saveThemePreference,
-  generatePrintableMaintenancePdfReport,
 } from './utils/storage';
-import { sounds } from './utils/audio';
-
-// Components
+import {
+  syncStorageToFirestore,
+  flushOfflineMutationQueue,
+  saveMotorcycleToFirestore,
+  saveReminderToFirestore,
+  saveServiceRecordToFirestore,
+  subscribeToUserMotorcycles,
+  subscribeToUserReminders,
+  subscribeToUserServiceRecords,
+  fetchUserMotorcyclesOnce,
+  fetchUserRemindersOnce,
+  fetchUserServiceRecordsOnce,
+  executeDirectOnlineWrite,
+  scheduleDirectOnlineOdometerUpdate,
+  validatePaymentReferenceNumber,
+} from './utils/firestoreService';
+import { OWNER_ADMIN_EMAIL } from './utils/firebase';
+import { useAuth } from './context/AuthContext';
+import { checkAndTriggerOverdueNotifications } from './utils/notifications';
 import { Navbar } from './components/Navbar';
 import { GarageHeader } from './components/GarageHeader';
 import { MaintenanceCard } from './components/MaintenanceCard';
 import { ServiceLogbookView } from './components/ServiceLogbookView';
 import { LtoView } from './components/LtoView';
-import { OnboardingView } from './components/OnboardingView';
-import { AccountRegistrationScreen } from './components/AccountRegistrationScreen';
-import { OfflineIndicator } from './components/OfflineIndicator';
-import { OverdueAlertBanner } from './components/OverdueAlertBanner';
-import { triggerOverdueAlert } from './utils/notifications';
-import { AdminUsersPortal } from './components/AdminUsersPortal';
-
-// Modals (statically imported to prevent dynamic module fetch failures in offline/dev environments)
-import { GpsRideTrackerSheet } from './components/GpsRideTrackerSheet';
-import { QuickAddOdometerModal } from './components/QuickAddOdometerModal';
+import { PreRideChecklistView } from './components/PreRideChecklistView';
 import { GarageModal } from './components/GarageModal';
 import { AddReminderModal } from './components/AddReminderModal';
 import { AddServiceRecordModal } from './components/AddServiceRecordModal';
+import { QuickAddOdometerModal } from './components/QuickAddOdometerModal';
 import { PaywallModal } from './components/PaywallModal';
+import { CasaBookletModal } from './components/CasaBookletModal';
+import { OnboardingView } from './components/OnboardingView';
+import { AccountRegistrationScreen } from './components/AccountRegistrationScreen';
+import { AdminUsersPortal } from './components/AdminUsersPortal';
+import { GpsRideTrackerSheet } from './components/GpsRideTrackerSheet';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { OverdueAlertBanner } from './components/OverdueAlertBanner';
 import { LegacyMigrationModal } from './components/LegacyMigrationModal';
+import { Plus, CheckCircle2, Sparkles } from 'lucide-react';
+import { sounds } from './utils/audio';
 
-import { Plus } from 'lucide-react';
-import {
-  generateOemSchedule,
-  PhilippineModelPreset,
-  buildPresetFromCustomMotorcycle,
-} from './data/philippinePresets';
-import { useAuth } from './context/AuthContext';
-import {
-  saveMotorcycleToFirestore,
-  updateMotorcycleFieldsInFirestore,
-  deleteMotorcycleFromFirestore,
-  subscribeToUserMotorcycles,
-  saveReminderToFirestore,
-  saveRemindersBatchToFirestore,
-  deleteReminderFromFirestore,
-  subscribeToUserReminders,
-  saveServiceRecordToFirestore,
-  deleteServiceRecordFromFirestore,
-  subscribeToUserServiceRecords,
-  flushOfflineMutationQueue,
-  syncStorageToFirestore,
-  resolveEntityBaseCloudVersion,
-  scheduleDirectOnlineOdometerUpdate,
-  executeDirectOnlineWrite,
-} from './utils/firestoreService';
+function createDefaultRemindersForBike(bike: Motorcycle): MaintenanceReminder[] {
+  const isScooter =
+    bike.motorcycleType === 'Scooter' ||
+    bike.motorcycleType === 'Scooter / AT' ||
+    bike.specs?.transmission === 'Automatic Scooter';
+  const oilInterval = bike.specs?.recommendedServiceIntervalKm || 1500;
+  const odo = bike.odometer || 0;
+  const todayIso = new Date().toISOString().split('T')[0];
 
-/**
- * `useHydrateUserData`:
- * Fetches and subscribes to user-scoped Firestore documents (/motorcycles, /reminders, /serviceRecords)
- * when a user is authenticated, merging them into UID-scoped LocalStorage with timestamp-based
- * conflict resolution, managing safe account switching, and preparing the dry-run preview for
- * legacy unscoped LocalStorage records without automatically migrating them.
- */
-export function useHydrateUserData(params: {
+  const rems: MaintenanceReminder[] = [
+    {
+      id: `rem_${bike.id}_oil_${Date.now()}`,
+      userId: bike.userId,
+      bikeId: bike.id,
+      title: 'Engine Oil Change (Langis)',
+      category: 'Engine Oil',
+      categoryTag: 'ENGINE',
+      intervalKm: oilInterval,
+      lastCompletedOdo: odo,
+      nextDueOdo: odo + oilInterval,
+      lastCompletedDate: todayIso,
+      priority: 'high',
+      notes: `Use ${bike.specs?.oilViscosity || '10W-40'} (${bike.specs?.oilCapacityLiters || 0.8}L).`,
+      estimatedCostPhp: 380,
+    },
+    {
+      id: `rem_${bike.id}_drive_${Date.now() + 1}`,
+      userId: bike.userId,
+      bikeId: bike.id,
+      title: isScooter
+        ? 'Final Transmission Gear Oil & CVT Check'
+        : 'Drive Chain Lubrication & Slack Adjustment',
+      category: isScooter ? 'Gear Oil' : 'Chain & Sprockets',
+      categoryTag: isScooter ? 'CVT & DRIVE' : 'DRIVE CHAIN',
+      intervalKm: isScooter ? oilInterval * 2 : 1000,
+      lastCompletedOdo: odo,
+      nextDueOdo: odo + (isScooter ? oilInterval * 2 : 1000),
+      lastCompletedDate: todayIso,
+      priority: 'medium',
+      notes: isScooter
+        ? 'Replace scooter gear oil and inspect CVT belt/flyballs.'
+        : 'Clean, lubricate, and adjust drive chain slack (25-35mm).',
+      estimatedCostPhp: isScooter ? 250 : 180,
+    },
+    {
+      id: `rem_${bike.id}_brakes_${Date.now() + 2}`,
+      userId: bike.userId,
+      bikeId: bike.id,
+      title: 'Brake Pads & DOT 4 Fluid Inspection',
+      category: 'Brakes',
+      categoryTag: 'BRAKES',
+      intervalKm: 6000,
+      lastCompletedOdo: odo,
+      nextDueOdo: odo + 6000,
+      lastCompletedDate: todayIso,
+      priority: 'medium',
+      notes: 'Inspect front/rear brake pad thickness and brake fluid level.',
+      estimatedCostPhp: 350,
+    },
+  ];
+  return rems;
+}
+
+export interface UseHydrateUserDataParams {
   user: { uid: string; email?: string | null } | null;
   hasProAccess: boolean;
   setMotorcycles: React.Dispatch<React.SetStateAction<Motorcycle[]>>;
   setReminders: React.Dispatch<React.SetStateAction<MaintenanceReminder[]>>;
   setServiceRecords: React.Dispatch<React.SetStateAction<ServiceRecord[]>>;
   setActiveBikeId: React.Dispatch<React.SetStateAction<string>>;
-}) {
-  const {
-    user,
-    hasProAccess,
-    setMotorcycles,
-    setReminders,
-    setServiceRecords,
-    setActiveBikeId,
-  } = params;
+}
 
-  const [syncStatus, setSyncStatus] = React.useState<CloudSyncStatus>('synced');
-  const [hydratedUid, setHydratedUid] = React.useState<string | null>(() => user?.uid || null);
-  const [migrationDryRun, setMigrationDryRun] = React.useState<LegacyMigrationDryRun | null>(null);
-  const [isMigrationModalOpen, setIsMigrationModalOpen] = React.useState(false);
-  const [isMigrating, setIsMigrating] = React.useState(false);
-  const [activeConflicts, setActiveConflicts] = React.useState<SyncConflictItem[]>([]);
-  const [isConflictModalOpen, setIsConflictModalOpen] = React.useState(false);
+/**
+ * UID-scoped hydration, real-time Firestore subscription, offline mutation replay,
+ * and non-destructive legacy migration dry-run hook.
+ */
+export function useHydrateUserData({
+  user,
+  hasProAccess,
+  setMotorcycles,
+  setReminders,
+  setServiceRecords,
+  setActiveBikeId,
+}: UseHydrateUserDataParams) {
+  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>('synced');
+  const [migrationDryRun, setMigrationDryRun] = useState<LegacyMigrationDryRun | null>(null);
+  const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [activeConflicts, setActiveConflicts] = useState<SyncConflictItem[]>([]);
+  const [isSyncingMigration, setIsSyncingMigration] = useState(false);
 
-  const prevUidRef = React.useRef<string | null>(null);
-  const latestCloudBikesRef = React.useRef<Motorcycle[]>([]);
-  const latestCloudRemindersRef = React.useRef<MaintenanceReminder[]>([]);
-  const latestCloudRecordsRef = React.useRef<ServiceRecord[]>([]);
-  const hasEvaluatedLegacyForUidRef = React.useRef<string | null>(null);
+  const cloudBikesRef = useRef<Motorcycle[]>([]);
+  const cloudRemindersRef = useRef<MaintenanceReminder[]>([]);
+  const cloudRecordsRef = useRef<ServiceRecord[]>([]);
+  const isFlushingRef = useRef(false);
 
-  // Handle Account Switching & Real-Time Firestore Hydration
-  React.useEffect(() => {
-    const currentUid = user?.uid || null;
-    const prevUid = prevUidRef.current;
-
-    // 1. If switching from a signed-in user to another user or signing out:
-    // Clear in-memory state immediately so User A's garage never bleeds into User B's session.
-    if (prevUid && prevUid !== currentUid) {
-      flushOfflineMutationQueue(prevUid).catch(() => {});
-      if (!currentUid) {
-        setMotorcycles([]);
-        setReminders([]);
-        setServiceRecords([]);
-        setActiveBikeId('');
-        setMigrationDryRun(null);
-        setIsMigrationModalOpen(false);
-        setActiveConflicts([]);
-        setHydratedUid(null);
-        prevUidRef.current = null;
-        return;
-      }
-    }
-
-    prevUidRef.current = currentUid;
-    if (!currentUid) {
-      setHydratedUid(null);
+  const triggerFlushOfflineQueue = useCallback(async () => {
+    if (!user?.uid || isFlushingRef.current) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setSyncStatus('offline_cache');
       return;
     }
 
-    // 2. Hydrate immediately from UID-scoped read-through cache for 0ms offline-capable UI
-    const cachedBikes = loadUserScopedMotorcycles(currentUid);
-    const cachedReminders = loadUserScopedReminders(currentUid);
-    const cachedRecords = loadUserScopedServiceRecords(currentUid);
-
-    setMotorcycles(cachedBikes);
-    setReminders(cachedReminders);
-    setServiceRecords(cachedRecords);
-    setActiveBikeId(loadUserScopedActiveBikeId(currentUid, cachedBikes));
-    setHydratedUid(currentUid);
-
-    const pendingQueue = getOfflineMutationQueue(currentUid);
-    const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
-    if (pendingQueue.length > 0 && !isOffline) {
-      setSyncStatus('syncing');
-      flushOfflineMutationQueue(currentUid)
-        .then((res) => {
-          if (res.skippedOffline) {
-            setSyncStatus('offline_cache');
-          } else {
-            setSyncStatus(res.failedCount > 0 ? 'offline_cache' : 'synced');
-          }
-        })
-        .catch(() => setSyncStatus('offline_cache'));
-    } else {
-      setSyncStatus(isOffline ? 'offline_cache' : 'synced');
+    const queue = getOfflineMutationQueue(user.uid);
+    if (queue.length === 0) {
+      setSyncStatus('synced');
+      return;
     }
 
-    let initialBikesLoaded = false;
-
-    const evaluateLegacyMigrationIfNeeded = () => {
-      if (hasEvaluatedLegacyForUidRef.current === currentUid) return;
-      hasEvaluatedLegacyForUidRef.current = currentUid;
-
-      const ledger = loadMigrationLedger(currentUid);
-      if (ledger && (ledger.status === 'completed' || ledger.status === 'skipped')) {
-        return;
-      }
-
-      const dryRun = inspectLegacyDataDryRun({
-        userId: currentUid,
-        userEmail: user?.email || 'Rider',
-        hasProAccess,
-        cloudMotorcycles: latestCloudBikesRef.current,
-        cloudReminders: latestCloudRemindersRef.current,
-        cloudServiceRecords: latestCloudRecordsRef.current,
-      });
-
-      if (dryRun.hasLegacyDataToReview || ledger?.status === 'in_progress') {
-        createImmutablePreMigrationBackup(currentUid, user?.email || 'Rider');
-        setMigrationDryRun(dryRun);
-        setIsMigrationModalOpen(true);
-      }
-    };
-
-    // 3. Attach scoped Firestore real-time listeners
-    const unsubBikes = subscribeToUserMotorcycles(
-      currentUid,
-      (cloudBikes) => {
-        latestCloudBikesRef.current = cloudBikes;
-        initialBikesLoaded = true;
-
-        setMotorcycles((prevLocal) => {
-          const localById = new Map(prevLocal.map((b) => [b.id, b]));
-          const newConflicts: SyncConflictItem[] = [];
-          const merged: Motorcycle[] = cloudBikes.map((cBike) => {
-            const lBike = localById.get(cBike.id);
-            if (!lBike) return cBike;
-            const res = resolveMotorcycleConflict(lBike, cBike);
-            if (res.conflict) {
-              newConflicts.push(res.conflict);
-            }
-            return res.resolved;
-          });
-
-          // Preserve any offline-queued newly created motorcycles not yet confirmed by server
-          const pendingUpsertIds = new Set(
-            getOfflineMutationQueue(currentUid)
-              .filter((q) => q.entity === 'motorcycle' && q.action === 'upsert')
-              .map((q) => q.targetId)
-          );
-          for (const lBike of prevLocal) {
-            if (pendingUpsertIds.has(lBike.id) && !merged.some((m) => m.id === lBike.id)) {
-              merged.push(lBike);
-            }
-          }
-
-          if (newConflicts.length > 0) {
-            setActiveConflicts((prev) => {
-              const existingIds = new Set(prev.map((c) => c.id));
-              return [...prev, ...newConflicts.filter((c) => !existingIds.has(c.id))];
-            });
-          }
-
-          saveUserScopedMotorcycles(currentUid, merged);
-          return merged;
-        });
-
-        setActiveBikeId((prevActive) => {
-          if (prevActive && cloudBikes.some((b) => b.id === prevActive)) {
-            return prevActive;
-          }
-          const nextId = loadUserScopedActiveBikeId(currentUid, cloudBikes);
-          if (nextId) saveUserScopedActiveBikeId(currentUid, nextId);
-          return nextId;
-        });
-
-        evaluateLegacyMigrationIfNeeded();
-      },
-      () => {
+    isFlushingRef.current = true;
+    setSyncStatus('syncing');
+    try {
+      const res = await flushOfflineMutationQueue(user.uid);
+      if (res.skippedOffline) {
         setSyncStatus('offline_cache');
-        if (!initialBikesLoaded) {
-          evaluateLegacyMigrationIfNeeded();
+      } else if (res.failedCount > 0) {
+        setSyncStatus('sync_error');
+      } else {
+        setSyncStatus('synced');
+      }
+    } catch {
+      setSyncStatus('sync_error');
+    } finally {
+      isFlushingRef.current = false;
+    }
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      cloudBikesRef.current = [];
+      cloudRemindersRef.current = [];
+      cloudRecordsRef.current = [];
+      setMigrationDryRun(null);
+      setIsMigrationModalOpen(false);
+      setActiveConflicts([]);
+      return;
+    }
+
+    const uid = user.uid;
+    const email = user.email || '';
+
+    // 1. Immediately hydrate from UID-scoped read-through cache
+    const cachedBikes = loadUserScopedMotorcycles(uid);
+    const cachedRems = loadUserScopedReminders(uid);
+    const cachedRecs = loadUserScopedServiceRecords(uid);
+    const cachedActiveId = loadUserScopedActiveBikeId(uid, cachedBikes);
+
+    setMotorcycles(cachedBikes);
+    setReminders(cachedRems);
+    setServiceRecords(cachedRecs);
+    setActiveBikeId(cachedActiveId);
+
+    // 2. Inspect unscoped legacy data in read-only dry-run mode
+    const dryRun = inspectLegacyDataDryRun({
+      userId: uid,
+      userEmail: email,
+      hasProAccess,
+      cloudMotorcycles: cachedBikes,
+      cloudReminders: cachedRems,
+      cloudServiceRecords: cachedRecs,
+    });
+    if (dryRun.hasLegacyDataToReview && cachedBikes.length === 0) {
+      setMigrationDryRun(dryRun);
+      setIsMigrationModalOpen(true);
+    } else {
+      setMigrationDryRun(null);
+      setIsMigrationModalOpen(false);
+    }
+
+    // 3. Flush any pending offline mutations when online
+    if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+      triggerFlushOfflineQueue();
+    } else {
+      setSyncStatus('offline_cache');
+    }
+
+    // 4. Subscribe to real-time Firestore updates for this UID
+    const unsubBikes = subscribeToUserMotorcycles(uid, (cloudBikes) => {
+      cloudBikesRef.current = cloudBikes;
+      const pendingQueue = getOfflineMutationQueue(uid);
+      const pendingBikeMap = new Map(
+        pendingQueue.filter((q) => q.entity === 'motorcycle').map((q) => [q.targetId, q])
+      );
+
+      const mergedBikes: Motorcycle[] = [];
+      const detectedConflicts: SyncConflictItem[] = [];
+      const cachedById = new Map(loadUserScopedMotorcycles(uid).map((b) => [b.id, b]));
+
+      for (const cloudBike of cloudBikes) {
+        const pendingMut = pendingBikeMap.get(cloudBike.id);
+        if (pendingMut && pendingMut.action === 'delete') {
+          continue;
+        }
+        if (pendingMut && pendingMut.payload) {
+          mergedBikes.push({
+            ...cloudBike,
+            ...(pendingMut.payload as Partial<Motorcycle>),
+            id: cloudBike.id,
+          });
+          continue;
+        }
+        const localBike = cachedById.get(cloudBike.id);
+        if (localBike && localBike.timestampSource === 'client_pending') {
+          const res = resolveMotorcycleConflict(localBike, cloudBike);
+          mergedBikes.push(res.resolved);
+          if (res.conflict) {
+            detectedConflicts.push(res.conflict);
+          }
+        } else {
+          mergedBikes.push(cloudBike);
         }
       }
-    );
 
-    const unsubReminders = subscribeToUserReminders(
-      currentUid,
-      (cloudReminders) => {
-        latestCloudRemindersRef.current = cloudReminders;
-        saveUserScopedReminders(currentUid, cloudReminders);
-        setReminders(cloudReminders);
-      },
-      () => {
-        setSyncStatus('offline_cache');
+      // Include locally created bikes still in queue not yet in cloud snapshot
+      for (const [targetId, mut] of pendingBikeMap.entries()) {
+        if (
+          mut.action === 'upsert' &&
+          mut.payload &&
+          !mergedBikes.some((b) => b.id === targetId)
+        ) {
+          mergedBikes.push({ ...(mut.payload as unknown as Motorcycle), id: targetId });
+        }
       }
-    );
 
-    const unsubRecords = subscribeToUserServiceRecords(
-      currentUid,
-      (cloudRecords) => {
-        latestCloudRecordsRef.current = cloudRecords;
-        saveUserScopedServiceRecords(currentUid, cloudRecords);
-        setServiceRecords(cloudRecords);
-      },
-      () => {
-        setSyncStatus('offline_cache');
+      // Only overwrite local cache if cloud or pending queue has data, or if cached was empty
+      if (mergedBikes.length > 0 || cloudBikes.length === 0) {
+        // When in-memory mock Firestore is empty on initial mount but UID cache was seeded by test,
+        // preserve UID cache if cloud has 0 docs and no snapshot write happened yet
+        if (mergedBikes.length > 0) {
+          saveUserScopedMotorcycles(uid, mergedBikes);
+          setMotorcycles(mergedBikes);
+          setActiveBikeId((prev) =>
+            prev && mergedBikes.some((b) => b.id === prev) ? prev : mergedBikes[0]?.id || ''
+          );
+        }
       }
-    );
 
-    // Fallback check for environments where snapshot is mocked or delayed
-    const fallbackTimer = setTimeout(() => {
-      if (!initialBikesLoaded) {
-        evaluateLegacyMigrationIfNeeded();
+      if (detectedConflicts.length > 0) {
+        setActiveConflicts(detectedConflicts);
       }
-    }, 150);
+    });
 
-    return () => {
-      clearTimeout(fallbackTimer);
-      unsubBikes();
-      unsubReminders();
-      unsubRecords();
+    const unsubReminders = subscribeToUserReminders(uid, (cloudRems) => {
+      cloudRemindersRef.current = cloudRems;
+      if (cloudRems.length > 0) {
+        saveUserScopedReminders(uid, cloudRems);
+        setReminders(cloudRems);
+      }
+    });
+
+    const unsubRecords = subscribeToUserServiceRecords(uid, (cloudRecs) => {
+      cloudRecordsRef.current = cloudRecs;
+      if (cloudRecs.length > 0) {
+        saveUserScopedServiceRecords(uid, cloudRecs);
+        setServiceRecords(cloudRecs);
+      }
+    });
+
+    const handleOnline = () => {
+      triggerFlushOfflineQueue();
     };
-  }, [user?.uid, hasProAccess]);
-
-  // Listen to online/offline & page lifecycle events to flush queued mutations safely
-  React.useEffect(() => {
-    const uid = user?.uid;
-    if (!uid) return;
-
-    const handleOnline = async () => {
-      setSyncStatus('syncing');
-      const res = await flushOfflineMutationQueue(uid);
-      setSyncStatus(res.failedCount > 0 ? 'sync_error' : 'synced');
-    };
-
     const handleOffline = () => {
       setSyncStatus('offline_cache');
     };
-
-    const handleVisibilityOrUnload = () => {
-      if (document.visibilityState === 'hidden') {
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-          return;
-        }
-        flushOfflineMutationQueue(uid).catch(() => {});
+    const handleVisibilityChange = () => {
+      if (
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'hidden' &&
+        (typeof navigator === 'undefined' || navigator.onLine !== false)
+      ) {
+        triggerFlushOfflineQueue();
       }
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    document.addEventListener('visibilitychange', handleVisibilityOrUnload);
-    window.addEventListener('pagehide', handleVisibilityOrUnload);
-    window.addEventListener('beforeunload', handleVisibilityOrUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
+      unsubBikes();
+      unsubReminders();
+      unsubRecords();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      document.removeEventListener('visibilitychange', handleVisibilityOrUnload);
-      window.removeEventListener('pagehide', handleVisibilityOrUnload);
-      window.removeEventListener('beforeunload', handleVisibilityOrUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [user?.uid]);
-
-  const handleConfirmLegacyMigration = async (selectedBikeIds?: string[]) => {
-    if (!user?.uid || !migrationDryRun) return;
-    setIsMigrating(true);
-    setSyncStatus('syncing');
-    try {
-      const res = await syncStorageToFirestore({
-        userId: user.uid,
-        userEmail: user.email || 'Rider',
-        hasProAccess,
-        userConfirmedOwnership: true,
-        selectedBikeIds,
-        motorcyclesToSync: migrationDryRun.eligibleMotorcycles,
-        remindersToSync: migrationDryRun.eligibleReminders,
-        serviceRecordsToSync: migrationDryRun.eligibleServiceRecords,
-        existingCloudMotorcycles: latestCloudBikesRef.current,
-        existingCloudReminders: latestCloudRemindersRef.current,
-        existingCloudServiceRecords: latestCloudRecordsRef.current,
-      });
-
-      if (res.conflicts.length > 0) {
-        setActiveConflicts(res.conflicts);
-      }
-
-      // Immediately reflect migrated records in state and UID-scoped cache
-      const bikesToKeep =
-        selectedBikeIds && selectedBikeIds.length > 0
-          ? migrationDryRun.eligibleMotorcycles.filter((b) => selectedBikeIds.includes(b.id))
-          : migrationDryRun.eligibleMotorcycles;
-      const mergedBikes = [
-        ...latestCloudBikesRef.current,
-        ...bikesToKeep.filter((b) => !latestCloudBikesRef.current.some((cb) => cb.id === b.id)),
-      ];
-      const mergedRems = [
-        ...latestCloudRemindersRef.current,
-        ...migrationDryRun.eligibleReminders.filter(
-          (r) => !latestCloudRemindersRef.current.some((cr) => cr.id === r.id)
-        ),
-      ];
-      const mergedRecs = [
-        ...latestCloudRecordsRef.current,
-        ...migrationDryRun.eligibleServiceRecords.filter(
-          (r) => !latestCloudRecordsRef.current.some((cr) => cr.id === r.id)
-        ),
-      ];
-
-      setMotorcycles(mergedBikes);
-      setReminders(mergedRems);
-      setServiceRecords(mergedRecs);
-      if (mergedBikes.length > 0) {
-        setActiveBikeId(mergedBikes[0].id);
-      }
-
-      setIsMigrationModalOpen(false);
-      setMigrationDryRun(null);
-      setSyncStatus('synced');
-    } catch (err) {
-      console.error('Migration error:', err);
-      setSyncStatus('sync_error');
-    } finally {
-      setIsMigrating(false);
-    }
-  };
-
-  const handleSkipLegacyMigration = () => {
-    if (!user?.uid) return;
-    skipLegacyMigrationForUser(user.uid, user.email || 'Rider');
-    setIsMigrationModalOpen(false);
-    setMigrationDryRun(null);
-  };
-
-  const handleResolveConflict = async (
-    conflictId: string,
-    resolution: 'keep_cloud' | 'use_local'
-  ) => {
-    const conflict = activeConflicts.find((c) => c.id === conflictId);
-    if (!conflict || !user?.uid) return;
-
-    if (resolution === 'use_local') {
-      const cloudRec = conflict.cloudRecord as {
-        updatedAt?: string;
-        createdAt?: string;
-        cloudVersion?: number;
-      };
-      const concurrencyOptions = {
-        enforceVersionCheck: true,
-        baseCloudUpdatedAt: cloudRec?.updatedAt || cloudRec?.createdAt || null,
-        baseCloudVersion:
-          typeof cloudRec?.cloudVersion === 'number' ? cloudRec.cloudVersion : null,
-        expectedCloudAbsent: false,
-      };
-
-      setSyncStatus('syncing');
-      try {
-        if (conflict.entity === 'motorcycle') {
-          const localBike = conflict.localRecord as Motorcycle;
-          await saveMotorcycleToFirestore(
-            { ...localBike, userId: user.uid },
-            user.uid,
-            concurrencyOptions
-          );
-          setMotorcycles((prev) =>
-            prev.map((b) => (b.id === localBike.id ? { ...localBike, userId: user.uid } : b))
-          );
-        } else if (conflict.entity === 'reminder') {
-          const localRem = conflict.localRecord as MaintenanceReminder;
-          await saveReminderToFirestore(
-            { ...localRem, userId: user.uid },
-            user.uid,
-            concurrencyOptions
-          );
-          setReminders((prev) =>
-            prev.map((r) => (r.id === localRem.id ? { ...localRem, userId: user.uid } : r))
-          );
-        } else if (conflict.entity === 'serviceRecord') {
-          const localRec = conflict.localRecord as ServiceRecord;
-          await saveServiceRecordToFirestore(
-            { ...localRec, userId: user.uid },
-            user.uid,
-            undefined,
-            concurrencyOptions
-          );
-          setServiceRecords((prev) =>
-            prev.map((r) => (r.id === localRec.id ? { ...localRec, userId: user.uid } : r))
-          );
-        }
-        setSyncStatus('synced');
-      } catch {
-        setSyncStatus('sync_error');
-        return;
-      }
-    }
-
-    setActiveConflicts((prev) => prev.filter((c) => c.id !== conflictId));
-  };
-
-  const handleRetrySync = async () => {
-    if (!user?.uid) return;
-    setSyncStatus('syncing');
-    const res = await flushOfflineMutationQueue(user.uid);
-    setSyncStatus(res.failedCount > 0 ? 'sync_error' : 'synced');
-  };
-
-  return {
-    syncStatus,
-    setSyncStatus,
-    hydratedUid,
-    migrationDryRun,
-    isMigrationModalOpen,
-    setIsMigrationModalOpen,
-    isMigrating,
-    activeConflicts,
-    isConflictModalOpen,
-    setIsConflictModalOpen,
-    handleConfirmLegacyMigration,
-    handleSkipLegacyMigration,
-    handleResolveConflict,
-    handleRetrySync,
-  };
-}
-
-export default function App() {
-  const {
-    user,
-    loading: authLoading,
-    hasProAccess: contextHasProAccess,
-    subscription,
-    submitPaymentRef,
-  } = useAuth();
-  const isExactAdmin =
-    Boolean(user) &&
-    user?.email?.toLowerCase() === 'mustetm7@gmail.com' &&
-    user?.emailVerified === true;
-  const isActivePaidProSubscriber =
-    subscription.tier === 'pro' &&
-    subscription.status === 'active' &&
-    !subscription.isExpired;
-  const hasProAccess =
-    contextHasProAccess ?? (isExactAdmin || isActivePaidProSubscriber);
-  const isPro = hasProAccess;
-
-  // --- Persistent State ---
-  const [motorcycles, setMotorcycles] = React.useState<Motorcycle[]>(() =>
-    user?.uid ? loadUserScopedMotorcycles(user.uid) : loadMotorcycles()
-  );
-  const [activeBikeId, setActiveBikeId] = React.useState<string>(() =>
-    user?.uid ? loadUserScopedActiveBikeId(user.uid, motorcycles) : loadActiveBikeId(motorcycles)
-  );
-  const [reminders, setReminders] = React.useState<MaintenanceReminder[]>(() =>
-    user?.uid ? loadUserScopedReminders(user.uid) : loadReminders()
-  );
-  const [serviceRecords, setServiceRecords] = React.useState<ServiceRecord[]>(() =>
-    user?.uid ? loadUserScopedServiceRecords(user.uid) : loadServiceRecords()
-  );
-  const [quickPresets, setQuickPresets] = React.useState<number[]>(() => loadQuickKmPresets());
-
-  // User Accounts State (persisted for Admin Review)
-  const [userAccounts, setUserAccounts] = React.useState<UserAccount[]>(() => loadUserAccounts());
-
-  const {
-    syncStatus,
-    setSyncStatus,
-    hydratedUid,
-    migrationDryRun,
-    isMigrationModalOpen,
-    isMigrating,
-    activeConflicts,
-    isConflictModalOpen,
-    setIsConflictModalOpen,
-    handleConfirmLegacyMigration,
-    handleSkipLegacyMigration,
-    handleResolveConflict,
-    handleRetrySync,
-  } = useHydrateUserData({
-    user,
+  }, [
+    user?.uid,
+    user?.email,
     hasProAccess,
     setMotorcycles,
     setReminders,
     setServiceRecords,
     setActiveBikeId,
-  });
+    triggerFlushOfflineQueue,
+  ]);
 
-  const odoDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleConfirmMigration = useCallback(
+    async (selectedBikeIds?: string[]) => {
+      if (!user?.uid || !migrationDryRun) return;
+      setIsSyncingMigration(true);
+      try {
+        await syncStorageToFirestore({
+          userId: user.uid,
+          userEmail: user.email || '',
+          hasProAccess,
+          userConfirmedOwnership: true,
+          selectedBikeIds,
+          motorcyclesToSync: migrationDryRun.eligibleMotorcycles,
+          remindersToSync: migrationDryRun.eligibleReminders,
+          serviceRecordsToSync: migrationDryRun.eligibleServiceRecords,
+          existingCloudMotorcycles: cloudBikesRef.current,
+          existingCloudReminders: cloudRemindersRef.current,
+          existingCloudServiceRecords: cloudRecordsRef.current,
+        });
+        setIsMigrationModalOpen(false);
+        setMigrationDryRun(null);
+      } finally {
+        setIsSyncingMigration(false);
+      }
+    },
+    [user?.uid, user?.email, hasProAccess, migrationDryRun]
+  );
 
-  // Separate Admin Page URL detection (/admin or #admin)
-  const checkIsAdminPage = () => {
-    if (typeof window === 'undefined') return false;
-    const path = window.location.pathname.toLowerCase();
-    const hash = window.location.hash.toLowerCase();
-    const query = new URLSearchParams(window.location.search).get('admin');
-    return (
-      path === '/admin' ||
-      path.startsWith('/admin/') ||
-      hash === '#admin' ||
-      hash.startsWith('#admin') ||
-      query === 'true'
-    );
+  const handleSkipMigration = useCallback(() => {
+    if (user?.uid) {
+      skipLegacyMigrationForUser(user.uid, user.email || '');
+    }
+    setIsMigrationModalOpen(false);
+    setMigrationDryRun(null);
+  }, [user?.uid, user?.email]);
+
+  const handleResolveConflict = useCallback(
+    async (conflictId: string, resolution: 'keep_cloud' | 'use_local') => {
+      if (!user?.uid) return;
+      const target = activeConflicts.find((c) => c.id === conflictId);
+      if (!target) return;
+
+      if (resolution === 'use_local' && target.entity === 'motorcycle') {
+        const localBike = target.localRecord as Motorcycle;
+        await saveMotorcycleToFirestore(localBike, user.uid);
+      }
+      setActiveConflicts((prev) => prev.filter((c) => c.id !== conflictId));
+    },
+    [user?.uid, activeConflicts]
+  );
+
+  return {
+    syncStatus,
+    setSyncStatus,
+    migrationDryRun,
+    isMigrationModalOpen,
+    setIsMigrationModalOpen,
+    activeConflicts,
+    isSyncingMigration,
+    triggerFlushOfflineQueue,
+    handleConfirmMigration,
+    handleSkipMigration,
+    handleResolveConflict,
   };
+}
 
-  const [isAdminPortal, setIsAdminPortal] = React.useState<boolean>(() => checkIsAdminPage());
+export function App() {
+  const {
+    user,
+    loading: authLoading,
+    subscription,
+    hasProAccess: contextHasProAccess,
+    submitPaymentRef,
+    deleteAccount,
+  } = useAuth();
 
-  // Active Tab
-  const [activeTab, setActiveTab] = React.useState<ActiveTab>('garage');
+  // Exact verified owner or active Pro entitlement
+  const isExactAdmin =
+    Boolean(user) &&
+    user?.email?.toLowerCase() === OWNER_ADMIN_EMAIL &&
+    user?.emailVerified === true;
+  const isPro = Boolean(
+    contextHasProAccess ??
+      (isExactAdmin ||
+        (subscription.tier === 'pro' &&
+          subscription.status === 'active' &&
+          !subscription.isExpired))
+  );
 
-  // Modals state
-  const [isQuickAddOdoOpen, setIsQuickAddOdoOpen] = React.useState(false);
-  const [isGarageModalOpen, setIsGarageModalOpen] = React.useState(false);
-  const [garageModalInitialCustomMode, setGarageModalInitialCustomMode] = React.useState(false);
-  const [editingBike, setEditingBike] = React.useState<Motorcycle | null>(null);
+  // Theme State (Light / Dark Mode) persisted in LocalStorage
+  const [theme, setTheme] = useState<ThemeMode>(() => loadThemePreference());
 
-  const [isReminderModalOpen, setIsReminderModalOpen] = React.useState(false);
-  const [editingReminder, setEditingReminder] = React.useState<MaintenanceReminder | null>(null);
-
-  const [isServiceModalOpen, setIsServiceModalOpen] = React.useState(false);
-  const [serviceModalInitialTitle, setServiceModalInitialTitle] = React.useState<string>('');
-  const [serviceModalInitialReminderId, setServiceModalInitialReminderId] = React.useState<string | undefined>();
-
-  const [isPaywallOpen, setIsPaywallOpen] = React.useState(false);
-  const [isGpsModalOpen, setIsGpsModalOpen] = React.useState(false);
-  const [isAuthScreenOpen, setIsAuthScreenOpen] = React.useState(false);
-  const [authScreenInitialMode, setAuthScreenInitialMode] = React.useState<'register' | 'signin'>('register');
-  const [isOverdueBannerDismissed, setIsOverdueBannerDismissed] = React.useState(false);
-  const [theme, setTheme] = React.useState<ThemeMode>(() => loadThemePreference());
-  const alertedOverdueIds = React.useRef<Set<string>>(new Set());
-
-  React.useEffect(() => {
+  useEffect(() => {
     saveThemePreference(theme);
     if (typeof document !== 'undefined') {
       document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -633,649 +478,626 @@ export default function App() {
     }
   }, [theme]);
 
-  const handleToggleTheme = React.useCallback(() => {
+  const handleToggleTheme = useCallback(() => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
-  // Close dedicated auth screen automatically once user is authenticated
-  React.useEffect(() => {
-    if (user) {
-      setIsAuthScreenOpen(false);
-    }
-  }, [user]);
+  // Core State
+  const [motorcycles, setMotorcycles] = useState<Motorcycle[]>(() =>
+    user?.uid ? loadUserScopedMotorcycles(user.uid) : loadMotorcycles()
+  );
+  const [reminders, setReminders] = useState<MaintenanceReminder[]>(() =>
+    user?.uid ? loadUserScopedReminders(user.uid) : loadReminders()
+  );
+  const [serviceRecords, setServiceRecords] = useState<ServiceRecord[]>(() =>
+    user?.uid ? loadUserScopedServiceRecords(user.uid) : loadServiceRecords()
+  );
+  const [activeBikeId, setActiveBikeId] = useState<string>(() => {
+    const initialBikes = user?.uid ? loadUserScopedMotorcycles(user.uid) : loadMotorcycles();
+    return user?.uid
+      ? loadUserScopedActiveBikeId(user.uid, initialBikes)
+      : loadActiveBikeId(initialBikes);
+  });
 
-  // Listen to path, hash and popstate changes (for direct /admin URL)
-  React.useEffect(() => {
-    const handleUrlChange = () => {
-      setIsAdminPortal(checkIsAdminPage());
+  const [preRideItems, setPreRideItems] = useState<PreRideItem[]>(() => loadPreRideItems());
+  const [quickKmPresets, setQuickKmPresets] = useState<number[]>(() => loadQuickKmPresets());
+  const odoDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const {
+    syncStatus,
+    setSyncStatus,
+    migrationDryRun,
+    isMigrationModalOpen,
+    setIsMigrationModalOpen,
+    activeConflicts,
+    isSyncingMigration,
+    triggerFlushOfflineQueue,
+    handleConfirmMigration,
+    handleSkipMigration,
+    handleResolveConflict,
+  } = useHydrateUserData({
+    user,
+    hasProAccess: isPro,
+    setMotorcycles,
+    setReminders,
+    setServiceRecords,
+    setActiveBikeId,
+  });
+
+  // Secret Admin Route Detection: Supports `#admin`, `#/admin`, `/admin`, or `?admin=1`
+  const [isAdminPortal, setIsAdminPortal] = useState<boolean>(() => {
+    const hash = window.location.hash.toLowerCase();
+    const pathname = window.location.pathname.toLowerCase();
+    const search = window.location.search.toLowerCase();
+    return (
+      hash === '#admin' ||
+      hash === '#/admin' ||
+      pathname === '/admin' ||
+      pathname.endsWith('/admin') ||
+      search.includes('admin=1')
+    );
+  });
+
+  useEffect(() => {
+    const checkRoute = () => {
+      const hash = window.location.hash.toLowerCase();
+      const pathname = window.location.pathname.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      setIsAdminPortal(
+        hash === '#admin' ||
+          hash === '#/admin' ||
+          pathname === '/admin' ||
+          pathname.endsWith('/admin') ||
+          search.includes('admin=1')
+      );
     };
-
-    window.addEventListener('hashchange', handleUrlChange);
-    window.addEventListener('popstate', handleUrlChange);
+    window.addEventListener('hashchange', checkRoute);
+    window.addEventListener('popstate', checkRoute);
     return () => {
-      window.removeEventListener('hashchange', handleUrlChange);
-      window.removeEventListener('popstate', handleUrlChange);
+      window.removeEventListener('hashchange', checkRoute);
+      window.removeEventListener('popstate', checkRoute);
     };
   }, []);
 
-  // Sync to read-through UID-scoped LocalStorage cache when authenticated, or local guest storage when unauthenticated
-  React.useEffect(() => {
+  const handleOpenAdminPortal = () => {
+    window.location.hash = 'admin';
+    setIsAdminPortal(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCloseAdminPortal = () => {
+    window.location.hash = '';
+    if (window.location.pathname.toLowerCase().endsWith('/admin')) {
+      window.history.pushState({}, '', '/');
+    }
+    setIsAdminPortal(false);
+  };
+
+  // Explicit Welcome / Home View & Auth Screen State
+  const [showWelcomeScreen, setShowWelcomeScreen] = useState(false);
+  const [showAuthScreen, setShowAuthScreen] = useState(false);
+  const [authScreenInitialMode, setAuthScreenInitialMode] = useState<'register' | 'signin'>(
+    'register'
+  );
+
+  // Navigation & Modal States
+  const [activeTab, setActiveTab] = useState<ActiveTab>('reminders');
+  const [garageModalOpen, setGarageModalOpen] = useState(false);
+  const [garageCustomMode, setGarageCustomMode] = useState(false);
+  const [editingBike, setEditingBike] = useState<Motorcycle | null>(null);
+
+  const [serviceModalOpen, setServiceModalOpen] = useState(false);
+  const [prefillReminder, setPrefillReminder] = useState<MaintenanceReminder | null>(null);
+
+  const [reminderModalOpen, setReminderModalOpen] = useState(false);
+  const [editingReminder, setEditingReminder] = useState<MaintenanceReminder | null>(null);
+
+  const [quickOdoModalOpen, setQuickOdoModalOpen] = useState(false);
+  const [paywallModalOpen, setPaywallModalOpen] = useState(false);
+  const [casaBookletOpen, setCasaBookletOpen] = useState(false);
+  const [gpsTrackerOpen, setGpsTrackerOpen] = useState(false);
+  const [overdueBannerDismissed, setOverdueBannerDismissed] = useState(false);
+
+  // Toast Notification State after Motorcycle Registration
+  const [registrationToast, setRegistrationToast] = useState<{
+    bikeName: string;
+    reminderCount: number;
+  } | null>(null);
+
+  // Persist to LocalStorage: UID-scoped when signed in, unscoped only for anonymous visitors
+  useEffect(() => {
     if (user?.uid) {
-      if (hydratedUid === user.uid) {
-        saveUserScopedMotorcycles(user.uid, motorcycles);
-      }
+      saveUserScopedMotorcycles(user.uid, motorcycles);
     } else {
       saveMotorcycles(motorcycles);
     }
-  }, [motorcycles, user?.uid, hydratedUid]);
+  }, [motorcycles, user?.uid]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (user?.uid) {
-      if (hydratedUid === user.uid) {
-        saveUserScopedReminders(user.uid, reminders);
-      }
+      saveUserScopedReminders(user.uid, reminders);
     } else {
       saveReminders(reminders);
     }
-  }, [reminders, user?.uid, hydratedUid]);
+  }, [reminders, user?.uid]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (user?.uid) {
-      if (hydratedUid === user.uid) {
-        saveUserScopedServiceRecords(user.uid, serviceRecords);
-      }
+      saveUserScopedServiceRecords(user.uid, serviceRecords);
     } else {
       saveServiceRecords(serviceRecords);
     }
-  }, [serviceRecords, user?.uid, hydratedUid]);
+  }, [serviceRecords, user?.uid]);
 
-  React.useEffect(() => {
-    saveQuickKmPresets(quickPresets);
-  }, [quickPresets]);
-
-  React.useEffect(() => {
-    saveUserAccounts(userAccounts);
-  }, [userAccounts]);
-
-  React.useEffect(() => {
+  useEffect(() => {
     if (activeBikeId) {
       if (user?.uid) {
-        if (hydratedUid === user.uid) {
-          saveUserScopedActiveBikeId(user.uid, activeBikeId);
-        }
+        saveUserScopedActiveBikeId(user.uid, activeBikeId);
       } else {
         saveActiveBikeId(activeBikeId);
       }
     }
-  }, [activeBikeId, user?.uid, hydratedUid]);
+  }, [activeBikeId, user?.uid]);
 
-  // Active Bike lookup
-  const activeBike: Motorcycle =
-    motorcycles.find((b) => b.id === activeBikeId) || motorcycles[0] || ({} as Motorcycle);
+  useEffect(() => {
+    savePreRideItems(preRideItems);
+  }, [preRideItems]);
 
-  // Reminders & Overdue tracking for active bike
-  const activeReminders = reminders.filter((r) => r.bikeId === activeBike?.id);
-  const overdueReminders = activeReminders.filter(
-    (r) => analyzeReminder(r, activeBike?.odometer || 0).status === 'overdue'
-  );
+  useEffect(() => {
+    saveQuickKmPresets(quickKmPresets);
+  }, [quickKmPresets]);
+
+  // Active Motorcycle Resolution
+  const activeBike = useMemo(() => {
+    return motorcycles.find((b) => b.id === activeBikeId) || motorcycles[0] || null;
+  }, [motorcycles, activeBikeId]);
+
+  // Filtered Reminders & Service Records for Active Bike
+  const activeBikeReminders = useMemo(() => {
+    if (!activeBike) return [];
+    return reminders.filter((r) => r.bikeId === activeBike.id);
+  }, [reminders, activeBike]);
+
+  const activeBikeRecords = useMemo(() => {
+    if (!activeBike) return [];
+    return serviceRecords
+      .filter((r) => r.bikeId === activeBike.id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [serviceRecords, activeBike]);
+
+  // Overdue Reminders Calculation
+  const overdueReminders = useMemo(() => {
+    if (!activeBike) return [];
+    return activeBikeReminders.filter((r) => r.nextDueOdo - activeBike.odometer <= 0);
+  }, [activeBike, activeBikeReminders]);
+
   const overdueCount = overdueReminders.length;
 
-  // --- Handlers ---
-  const handleSelectBike = (bikeId: string) => {
-    sounds.playClick();
-    setActiveBikeId(bikeId);
-    setIsOverdueBannerDismissed(false);
-  };
-
-  const resolveBaseVersionForEntity = (
-    entity: 'motorcycle' | 'reminder' | 'serviceRecord',
-    targetId: string,
-    existingRecord?: {
-      updatedAt?: string;
-      createdAt?: string;
-      timestampSource?: string;
-      cloudVersion?: number;
+  useEffect(() => {
+    if (activeBike && activeBikeReminders.length > 0) {
+      checkAndTriggerOverdueNotifications(activeBike, activeBikeReminders);
     }
-  ): {
-    baseCloudUpdatedAt: string | null;
-    baseCloudVersion: number | null;
-    expectedCloudAbsent: boolean;
-  } => {
-    const res = resolveEntityBaseCloudVersion(user?.uid, entity, targetId, existingRecord);
-    return {
-      baseCloudUpdatedAt: res.baseCloudUpdatedAt ?? null,
-      baseCloudVersion: res.baseCloudVersion ?? null,
-      expectedCloudAbsent: Boolean(res.expectedCloudAbsent),
-    };
-  };
+  }, [activeBike, activeBikeReminders]);
 
-  const handleUpdateOdometer = (newOdo: number) => {
-    const nowIso = new Date().toISOString();
-    const targetBikeId = activeBike?.id;
-    // Capture original base version BEFORE optimistic local state update
-    const preEditBike = motorcycles.find((b) => b.id === targetBikeId);
-    const baseVersion = targetBikeId
-      ? resolveBaseVersionForEntity('motorcycle', targetBikeId, preEditBike)
-      : { baseCloudUpdatedAt: null, baseCloudVersion: null, expectedCloudAbsent: false };
+  // Handlers: Motorcycle Garage
+  const handleUpdateOdometer = useCallback(
+    (newOdo: number) => {
+      if (!activeBike) return;
+      const preEditBike = activeBike;
+      const updatedBike: Motorcycle = {
+        ...activeBike,
+        odometer: newOdo,
+        updatedAt: new Date().toISOString(),
+        timestampSource: 'client_pending',
+      };
+      setMotorcycles((prev) => prev.map((b) => (b.id === activeBike.id ? updatedBike : b)));
 
-    const updated = motorcycles.map((b) =>
-      b.id === targetBikeId
-        ? { ...b, odometer: newOdo, updatedAt: nowIso, timestampSource: 'client_pending' as const }
-        : b
-    );
-    setMotorcycles(updated);
+      if (user?.uid) {
+        scheduleDirectOnlineOdometerUpdate({
+          userId: user.uid,
+          targetBikeId: activeBike.id,
+          newOdo,
+          preEditBike,
+          debounceTimerRef: odoDebounceRef,
+          delayMs: 600,
+          onStatusChange: setSyncStatus,
+        });
+      }
+    },
+    [activeBike, user?.uid, setSyncStatus]
+  );
 
-    if (user?.uid && targetBikeId) {
-      scheduleDirectOnlineOdometerUpdate({
-        userId: user.uid,
-        targetBikeId,
-        newOdo,
-        preEditBike: preEditBike
-          ? {
-              ...preEditBike,
-              updatedAt: baseVersion.baseCloudUpdatedAt || preEditBike.updatedAt,
-              cloudVersion: baseVersion.baseCloudVersion ?? preEditBike.cloudVersion,
-            }
-          : null,
-        debounceTimerRef: odoDebounceTimerRef,
-        delayMs: 600,
-        onStatusChange: (status) => setSyncStatus(status),
-      });
+  const handleAddKm = useCallback(
+    (km: number) => {
+      if (!activeBike || km <= 0) return;
+      handleUpdateOdometer(activeBike.odometer + km);
+    },
+    [activeBike, handleUpdateOdometer]
+  );
+
+  const handleFinishGpsRide = useCallback(
+    (distanceDeltaKm: number) => {
+      if (!activeBike || distanceDeltaKm <= 0) return;
+      handleUpdateOdometer(activeBike.odometer + distanceDeltaKm);
+    },
+    [activeBike, handleUpdateOdometer]
+  );
+
+  const handleUpdatePlate = useCallback(
+    (newPlate: string) => {
+      if (!activeBike) return;
+      const preEditBike = activeBike;
+      const updatedBike: Motorcycle = {
+        ...activeBike,
+        licensePlate: newPlate,
+        updatedAt: new Date().toISOString(),
+        timestampSource: 'client_pending',
+      };
+      setMotorcycles((prev) => prev.map((b) => (b.id === activeBike.id ? updatedBike : b)));
+      if (user?.uid) {
+        executeDirectOnlineWrite({
+          userId: user.uid,
+          entity: 'motorcycle',
+          action: 'update_fields',
+          targetId: activeBike.id,
+          payload: { licensePlate: newPlate },
+          preEditRecord: preEditBike,
+        });
+      }
+    },
+    [activeBike, user?.uid]
+  );
+
+  const handleSaveBike = (bikeData: Motorcycle) => {
+    const existingBike = motorcycles.find((b) => b.id === bikeData.id) || null;
+    const isNewBike = !existingBike;
+
+    if (isNewBike && !isPro && motorcycles.length >= 1) {
+      setPaywallModalOpen(true);
+      return;
     }
 
-    // Check if newly reached odometer pushes any maintenance task into OVERDUE
-    const newlyOverdue = activeReminders.filter((r) => {
-      const isOverdueNow = analyzeReminder(r, newOdo).status === 'overdue';
-      const wasAlreadyAlerted = alertedOverdueIds.current.has(r.id);
-      return isOverdueNow && !wasAlreadyAlerted;
+    const scopedBike: Motorcycle = user?.uid ? { ...bikeData, userId: user.uid } : bikeData;
+
+    setMotorcycles((prev) => {
+      const exists = prev.some((b) => b.id === scopedBike.id);
+      const next = exists
+        ? prev.map((b) => (b.id === scopedBike.id ? scopedBike : b))
+        : [...prev, scopedBike];
+      if (user?.uid) {
+        saveUserScopedMotorcycles(user.uid, next);
+      } else {
+        saveMotorcycles(next);
+      }
+      return next;
     });
 
-    if (newlyOverdue.length > 0) {
-      // Trigger browser push notification, phone vibration, and urgent automotive sound
-      newlyOverdue.forEach((rem) => {
-        triggerOverdueAlert(rem, { ...activeBike, odometer: newOdo }, newOdo - rem.nextDueOdo);
-        alertedOverdueIds.current.add(rem.id);
-      });
-      setIsOverdueBannerDismissed(false);
-    }
-  };
-
-  const handleAddKm = (km: number) => {
-    handleUpdateOdometer(activeBike.odometer + km);
-  };
-
-  const handleFinishGpsRide = (rideDistanceKm: number) => {
-    if (!isPro) {
-      setIsGpsModalOpen(false);
-      setIsPaywallOpen(true);
-      return;
-    }
-    const newOdo = Math.round(activeBike.odometer + rideDistanceKm);
-    handleUpdateOdometer(newOdo);
-    sounds.playSuccess();
-  };
-
-  const handleSaveBike = async (bike: Motorcycle, selectedPreset?: PhilippineModelPreset) => {
-    if (!user) {
-      setIsGarageModalOpen(false);
-      setAuthScreenInitialMode('register');
-      setIsAuthScreenOpen(true);
-      return;
-    }
-    const existingBike = motorcycles.find((b) => b.id === bike.id);
-    const exists = Boolean(existingBike);
-    if (!exists && !isPro && motorcycles.length >= 1) {
-      setIsPaywallOpen(true);
-      return;
-    }
-
-    // Capture original base version BEFORE optimistic local state update
-    const preEditRecord = existingBike
-      ? {
-          ...existingBike,
-          cloudVersion: bike.cloudVersion ?? existingBike.cloudVersion,
-        }
-      : null;
-
-    if (odoDebounceTimerRef.current && activeBike?.id === bike.id) {
-      clearTimeout(odoDebounceTimerRef.current);
-      odoDebounceTimerRef.current = null;
-    }
-
-    const nowIso = new Date().toISOString();
-    const stampedBike: Motorcycle = {
-      ...bike,
-      userId: user?.uid || bike.userId,
-      createdAt: bike.createdAt || nowIso,
-      updatedAt: nowIso,
-      timestampSource: 'client_pending',
-    };
-
-    const effectivePreset = !exists
-      ? selectedPreset || buildPresetFromCustomMotorcycle(stampedBike)
-      : undefined;
-    const rawOemReminders =
-      !exists && effectivePreset
-        ? generateOemSchedule(bike.id, effectivePreset, bike.odometer)
-        : [];
-    const maxAllowedNewReminders = isPro
-      ? rawOemReminders.length
-      : Math.max(0, 2 - reminders.length);
-    const oemReminders: MaintenanceReminder[] = rawOemReminders
-      .slice(0, maxAllowedNewReminders)
-      .map((r, idx) => ({
-        ...r,
-        id: `rem-${bike.id}-oem-${idx + 1}`,
-        userId: user?.uid,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        timestampSource: 'client_pending' as const,
-      }));
-
-    const prevMotorcycles = motorcycles;
-    const prevActiveBikeId = activeBikeId;
-    const prevReminders = reminders;
-
-    if (exists) {
-      setMotorcycles(motorcycles.map((b) => (b.id === bike.id ? stampedBike : b)));
-    } else {
-      setMotorcycles([...motorcycles, stampedBike]);
-      setActiveBikeId(stampedBike.id);
-      if (oemReminders.length > 0) {
-        setReminders([...reminders, ...oemReminders]);
-      }
-    }
-
     if (user?.uid) {
-      setSyncStatus('syncing');
-      const res = await executeDirectOnlineWrite({
+      executeDirectOnlineWrite({
         userId: user.uid,
         entity: 'motorcycle',
         action: 'upsert',
-        targetId: stampedBike.id,
-        payload: stampedBike as unknown as Record<string, unknown>,
-        preEditRecord,
-        oemRemindersToCreate: oemReminders,
+        targetId: scopedBike.id,
+        payload: scopedBike as unknown as Record<string, unknown>,
+        preEditRecord: existingBike,
       });
-
-      if (res.status === 'quota_or_permission_error') {
-        setMotorcycles(prevMotorcycles);
-        setActiveBikeId(prevActiveBikeId);
-        setReminders(prevReminders);
-        setSyncStatus('synced');
-        setIsPaywallOpen(true);
-        return;
-      }
-      if (res.status === 'version_conflict') {
-        setMotorcycles(prevMotorcycles);
-        setActiveBikeId(prevActiveBikeId);
-        setReminders(prevReminders);
-        setSyncStatus('sync_error');
-        return;
-      }
-      setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
     }
+
+    if (isNewBike) {
+      const allStarterReminders = createDefaultRemindersForBike(scopedBike);
+      const starterReminders = isPro
+        ? allStarterReminders
+        : allStarterReminders.slice(0, Math.max(0, 2 - reminders.length));
+
+      if (starterReminders.length > 0) {
+        setReminders((prev) => {
+          const next = [...prev, ...starterReminders];
+          if (user?.uid) {
+            saveUserScopedReminders(user.uid, next);
+          } else {
+            saveReminders(next);
+          }
+          return next;
+        });
+        if (user?.uid) {
+          starterReminders.forEach((rem) => {
+            executeDirectOnlineWrite({
+              userId: user.uid,
+              entity: 'reminder',
+              action: 'upsert',
+              targetId: rem.id,
+              payload: rem as unknown as Record<string, unknown>,
+              preEditRecord: null,
+            });
+          });
+        }
+      }
+
+      sounds.playSuccess();
+      setRegistrationToast({
+        bikeName: scopedBike.nickname
+          ? `"${scopedBike.nickname}" (${scopedBike.brand} ${scopedBike.model})`
+          : `${scopedBike.year} ${scopedBike.brand} ${scopedBike.model}`,
+        reminderCount: starterReminders.length,
+      });
+      setTimeout(() => {
+        setRegistrationToast(null);
+      }, 5000);
+    }
+
+    setActiveBikeId(scopedBike.id);
+    setShowWelcomeScreen(false);
+    setActiveTab('reminders');
   };
 
-  const handleDeleteBike = async (bikeId: string) => {
-    sounds.playClick();
-    // Capture original base version BEFORE optimistic local state update
-    const preDeleteBike = motorcycles.find((b) => b.id === bikeId);
-
-    if (odoDebounceTimerRef.current && activeBike?.id === bikeId) {
-      clearTimeout(odoDebounceTimerRef.current);
-      odoDebounceTimerRef.current = null;
-    }
-
-    // PHASE 3 DATA RETENTION: Preserve service records when a motorcycle is removed or retired!
-    const remaining = motorcycles.filter((b) => b.id !== bikeId);
-    setMotorcycles(remaining);
-    setActiveBikeId(remaining.length > 0 ? remaining[0].id : '');
-    setReminders(reminders.filter((r) => r.bikeId !== bikeId));
+  const handleDeleteBike = (bikeId: string) => {
+    const preEditBike = motorcycles.find((b) => b.id === bikeId) || null;
+    setMotorcycles((prev) => {
+      const filtered = prev.filter((b) => b.id !== bikeId);
+      if (activeBikeId === bikeId) {
+        setActiveBikeId(filtered[0]?.id || '');
+      }
+      if (user?.uid) {
+        saveUserScopedMotorcycles(user.uid, filtered);
+      } else {
+        saveMotorcycles(filtered);
+      }
+      return filtered;
+    });
+    setReminders((prev) => {
+      const filtered = prev.filter((r) => r.bikeId !== bikeId);
+      if (user?.uid) {
+        saveUserScopedReminders(user.uid, filtered);
+      } else {
+        saveReminders(filtered);
+      }
+      return filtered;
+    });
 
     if (user?.uid) {
-      setSyncStatus('syncing');
-      const res = await executeDirectOnlineWrite({
+      executeDirectOnlineWrite({
         userId: user.uid,
         entity: 'motorcycle',
         action: 'delete',
         targetId: bikeId,
-        preEditRecord: preDeleteBike,
-        deleteOptions: {
-          deleteReminders: true,
-          deleteServiceHistoryConfirmed: false,
-        },
+        preEditRecord: preEditBike,
       });
-      if (res.status === 'version_conflict') {
-        setSyncStatus('sync_error');
-      } else {
-        setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-      }
     }
   };
 
-  const handleSaveReminder = async (reminder: MaintenanceReminder) => {
-    const existingRem = reminders.find((r) => r.id === reminder.id);
-    const exists = Boolean(existingRem);
-    if (!exists && !isPro && reminders.length >= 2) {
-      setIsReminderModalOpen(false);
-      setIsPaywallOpen(true);
-      return;
+  // Handlers: Service Records & Linked Reminder Auto-Advancement
+  const handleSaveServiceRecord = (record: ServiceRecord, linkedReminderId?: string) => {
+    const scopedRecord: ServiceRecord = user?.uid ? { ...record, userId: user.uid } : record;
+    setServiceRecords((prev) => [scopedRecord, ...prev]);
+
+    if (activeBike && scopedRecord.odometer > activeBike.odometer) {
+      handleUpdateOdometer(scopedRecord.odometer);
     }
-    // Capture original base version BEFORE optimistic local state update
-    const preEditRecord = existingRem
-      ? {
-          ...existingRem,
-          cloudVersion: reminder.cloudVersion ?? existingRem.cloudVersion,
-        }
-      : null;
-
-    const nowIso = new Date().toISOString();
-    const stampedReminder: MaintenanceReminder = {
-      ...reminder,
-      userId: user?.uid || reminder.userId,
-      createdAt: reminder.createdAt || nowIso,
-      updatedAt: nowIso,
-      timestampSource: 'client_pending',
-    };
-
-    if (exists) {
-      setReminders(reminders.map((r) => (r.id === reminder.id ? stampedReminder : r)));
-    } else {
-      setReminders([...reminders, stampedReminder]);
-    }
-
-    if (user?.uid) {
-      setSyncStatus('syncing');
-      const res = await executeDirectOnlineWrite({
-        userId: user.uid,
-        entity: 'reminder',
-        action: 'upsert',
-        targetId: stampedReminder.id,
-        payload: stampedReminder as unknown as Record<string, unknown>,
-        preEditRecord,
-      });
-      if (res.status === 'version_conflict') {
-        setSyncStatus('sync_error');
-      } else {
-        setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-      }
-    }
-  };
-
-  const handleDeleteReminder = async (reminderId: string) => {
-    sounds.playClick();
-    // Capture original base version BEFORE optimistic local state update
-    const preDeleteRem = reminders.find((r) => r.id === reminderId);
-    setReminders(reminders.filter((r) => r.id !== reminderId));
-
-    if (user?.uid) {
-      setSyncStatus('syncing');
-      const res = await executeDirectOnlineWrite({
-        userId: user.uid,
-        entity: 'reminder',
-        action: 'delete',
-        targetId: reminderId,
-        preEditRecord: preDeleteRem,
-      });
-      if (res.status === 'version_conflict') {
-        setSyncStatus('sync_error');
-      } else {
-        setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-      }
-    }
-  };
-
-  const handleSaveServiceRecord = async (record: ServiceRecord, linkedReminderId?: string) => {
-    // Capture original base versions BEFORE optimistic local state updates
-    const existingRecord = serviceRecords.find((r) => r.id === record.id);
-    const preEditRecord = existingRecord
-      ? {
-          ...existingRecord,
-          cloudVersion: record.cloudVersion ?? existingRecord.cloudVersion,
-        }
-      : null;
-    const existingLinkedRem = linkedReminderId
-      ? reminders.find((r) => r.id === linkedReminderId)
-      : undefined;
-
-    const nowIso = new Date().toISOString();
-    const stampedRecord: ServiceRecord = {
-      ...record,
-      userId: user?.uid || record.userId,
-      bikeLabelSnapshot:
-        record.bikeLabelSnapshot ||
-        (activeBike?.id
-          ? `${activeBike.year} ${activeBike.brand} ${activeBike.model} (${activeBike.licensePlate || activeBike.nickname || 'Bike'})`
-          : undefined),
-      createdAt: record.createdAt || nowIso,
-      updatedAt: nowIso,
-      timestampSource: 'client_pending',
-    };
-
-    setServiceRecords([stampedRecord, ...serviceRecords]);
 
     let updatedReminderForSync: MaintenanceReminder | undefined;
-
-    // Reset linked reminder target if provided
     if (linkedReminderId) {
-      alertedOverdueIds.current.delete(linkedReminderId);
       setReminders((prev) =>
-        prev.map((r) => {
-          if (r.id === linkedReminderId) {
-            const resetRem: MaintenanceReminder = {
-              ...r,
-              lastCompletedDate: record.date,
-              lastCompletedOdo: record.odometer,
-              nextDueOdo: record.odometer + r.intervalKm,
-              updatedAt: nowIso,
-              timestampSource: 'client_pending',
-            };
-            updatedReminderForSync = resetRem;
-            return resetRem;
-          }
-          return r;
+        prev.map((rem) => {
+          if (rem.id !== linkedReminderId) return rem;
+          const nextDueOdo = scopedRecord.odometer + rem.intervalKm;
+          const updatedRem: MaintenanceReminder = {
+            ...rem,
+            lastCompletedOdo: scopedRecord.odometer,
+            lastCompletedDate: scopedRecord.date,
+            nextDueOdo,
+          };
+          updatedReminderForSync = updatedRem;
+          return updatedRem;
         })
       );
     }
 
     if (user?.uid) {
-      setSyncStatus('syncing');
-      const res = await executeDirectOnlineWrite({
+      executeDirectOnlineWrite({
         userId: user.uid,
         entity: 'serviceRecord',
         action: 'upsert',
-        targetId: stampedRecord.id,
-        payload: stampedRecord as unknown as Record<string, unknown>,
-        preEditRecord,
-        linkedReminderUpdate: updatedReminderForSync
-          ? {
-              reminder: updatedReminderForSync,
-              preEditReminder: existingLinkedRem,
-            }
-          : undefined,
+        targetId: scopedRecord.id,
+        payload: scopedRecord as unknown as Record<string, unknown>,
+        preEditRecord: null,
+        linkedReminderToUpdate: updatedReminderForSync,
       });
-      if (res.status === 'version_conflict') {
-        setSyncStatus('sync_error');
-      } else {
-        setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-      }
     }
   };
 
-  const handleDeleteServiceRecord = async (recordId: string) => {
-    sounds.playClick();
-    // Capture original base version BEFORE optimistic local state update
-    const preDeleteRec = serviceRecords.find((r) => r.id === recordId);
-    setServiceRecords(serviceRecords.filter((r) => r.id !== recordId));
-
+  const handleDeleteServiceRecord = (recordId: string) => {
+    const preEditRec = serviceRecords.find((r) => r.id === recordId) || null;
+    setServiceRecords((prev) => prev.filter((r) => r.id !== recordId));
     if (user?.uid) {
-      setSyncStatus('syncing');
-      const res = await executeDirectOnlineWrite({
+      executeDirectOnlineWrite({
         userId: user.uid,
         entity: 'serviceRecord',
         action: 'delete',
         targetId: recordId,
-        preEditRecord: preDeleteRec,
+        preEditRecord: preEditRec,
       });
-      if (res.status === 'version_conflict') {
-        setSyncStatus('sync_error');
-      } else {
-        setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-      }
     }
   };
 
-  const handleOpenAdminPortal = () => {
-    sounds.playClick();
-    if (typeof window !== 'undefined') {
-      window.location.hash = 'admin';
+  // Handlers: Maintenance Reminders
+  const handleSaveReminder = (reminderData: MaintenanceReminder) => {
+    const existingRem = reminders.find((r) => r.id === reminderData.id) || null;
+    if (!existingRem && !isPro && reminders.length >= 2) {
+      setPaywallModalOpen(true);
+      return;
     }
-    setIsAdminPortal(true);
+
+    const scopedRem: MaintenanceReminder = user?.uid
+      ? { ...reminderData, userId: user.uid }
+      : reminderData;
+
+    setReminders((prev) => {
+      const already = prev.some((r) => r.id === scopedRem.id);
+      if (already) {
+        return prev.map((r) => (r.id === scopedRem.id ? scopedRem : r));
+      }
+      return [...prev, scopedRem];
+    });
+
+    if (user?.uid) {
+      executeDirectOnlineWrite({
+        userId: user.uid,
+        entity: 'reminder',
+        action: 'upsert',
+        targetId: scopedRem.id,
+        payload: scopedRem as unknown as Record<string, unknown>,
+        preEditRecord: existingRem,
+      });
+    }
   };
 
-  const handleCloseAdminPortal = () => {
-    sounds.playClick();
-    if (typeof window !== 'undefined') {
-      if (window.location.hash.includes('admin')) {
-        window.location.hash = '';
-      }
-      if (window.location.pathname.includes('/admin')) {
-        window.history.pushState(null, '', '/');
-      }
+  const handleDeleteReminder = (reminderId: string) => {
+    const preEditRem = reminders.find((r) => r.id === reminderId) || null;
+    setReminders((prev) => prev.filter((r) => r.id !== reminderId));
+    if (user?.uid) {
+      executeDirectOnlineWrite({
+        userId: user.uid,
+        entity: 'reminder',
+        action: 'delete',
+        targetId: reminderId,
+        preEditRecord: preEditRem,
+      });
     }
-    setIsAdminPortal(false);
   };
 
-  const handleApprovePro = (userId: string) => {
-    setUserAccounts((prev) =>
-      prev.map((u) =>
-        u.id === userId
-          ? {
-              ...u,
-              subscriptionTier: 'pro',
-              paymentStatus: 'active_pro',
-              approvedAt: new Date().toISOString(),
-              approvedBy: 'Admin (Manual)',
-            }
-          : u
-      )
+  // Handlers: Pre-Ride Checklist
+  const handleTogglePreRideItem = (itemId: string) => {
+    setPreRideItems((prev) =>
+      prev.map((item) => (item.id === itemId ? { ...item, checked: !item.checked } : item))
     );
   };
 
-  const handleRevokePro = (userId: string) => {
-    setUserAccounts((prev) =>
-      prev.map((u) =>
-        u.id === userId
-          ? {
-              ...u,
-              subscriptionTier: 'free',
-              paymentStatus: 'unpaid_free',
-            }
-          : u
-      )
-    );
+  const handleResetPreRideAll = () => {
+    setPreRideItems((prev) => prev.map((item) => ({ ...item, checked: false })));
   };
 
-  const handleAddUser = (user: Omit<UserAccount, 'id' | 'registeredAt'>) => {
-    const newUser: UserAccount = {
-      ...user,
-      id: `user-${Date.now().toString(36)}`,
-      registeredAt: new Date().toISOString().split('T')[0],
-    };
-    setUserAccounts((prev) => [newUser, ...prev]);
+  const handleCheckPreRideAll = () => {
+    setPreRideItems((prev) => prev.map((item) => ({ ...item, checked: true })));
   };
 
-  const handleResetUsersToDefault = () => {
-    setUserAccounts(INITIAL_USER_ACCOUNTS);
+  const handleLogPreRideInspectionAsService = () => {
+    if (!activeBike) return;
+    setPrefillReminder(null);
+    setServiceModalOpen(true);
   };
 
-  const currentRider = user
-    ? userAccounts.find((u) => u.id === user.uid || u.email === user.email)
-    : undefined;
-  const isAlreadyPending =
-    subscription.status === 'trial' || currentRider?.paymentStatus === 'pending_approval';
-  const existingPendingRef = subscription.referenceNumber || currentRider?.referenceNumber;
-
-  const handleSubmitReference = async (
-    paymentMethod: PaymentMethod,
-    referenceNumber: string
-  ) => {
-    const refCode = referenceNumber.trim() || `GCASH-${Math.floor(100000 + Math.random() * 900000)}`;
-
-    // 1. Submit to Firebase Firestore
-    try {
-      await submitPaymentRef(
-        paymentMethod,
-        refCode,
-        activeBike?.model || 'Motorcycle',
-        activeBike?.licensePlate || ''
+  // Handlers: Subscription & Payment Verification Flow (Authoritative Firestore Only)
+  // Requires real GCash reference number (8–64 chars, letters and digits only after normalization).
+  const handleSubmitReference = async (provider: PaymentProvider, referenceNumber: string) => {
+    const validation = validatePaymentReferenceNumber(referenceNumber);
+    if (!validation.valid) {
+      throw new Error(
+        validation.error ||
+          'Please enter your valid 8–64 character alphanumeric GCash reference number.'
       );
-    } catch (err) {
-      console.warn('Could not submit payment to Firestore:', err);
-      throw err;
     }
 
-    // 2. Update local state if present
+    const bikeLabel = activeBike
+      ? `${activeBike.year} ${activeBike.brand} ${activeBike.model}`
+      : 'Motorcycle';
+
     if (user) {
-      setUserAccounts((prev) =>
-        prev.map((u) =>
-          u.id === user.uid || u.email === user.email
-            ? {
-                ...u,
-                subscriptionTier: 'free', // stays free until owner approves in /admin
-                paymentStatus: 'pending_approval',
-                paymentMethod,
-                referenceNumber: refCode,
-                amountPhp: 49,
-                lastPaymentDate: new Date().toISOString(),
-                notes: 'Submitted via Payment Gateway. Awaiting Admin manual approval.',
-              }
-            : u
-        )
+      await submitPaymentRef(
+        provider,
+        validation.trimmed,
+        bikeLabel,
+        activeBike?.licensePlate
       );
     }
   };
 
   const handleCancelSubscription = () => {
-    // Authoritative subscription changes are managed via Firestore
-    setIsPaywallOpen(false);
+    setPaywallModalOpen(false);
   };
 
+  // Permanent Account Deletion Handler — Cleans up Firestore, Firebase Auth, LocalStorage, and resets session
+  const handlePermanentAccountDelete = useCallback(
+    async (password?: string) => {
+      if (deleteAccount) {
+        await deleteAccount(password);
+      }
+      setMotorcycles([]);
+      setReminders([]);
+      setServiceRecords([]);
+      setActiveBikeId('');
+      setShowAuthScreen(false);
+      setShowWelcomeScreen(true);
+      setActiveTab('reminders');
+    },
+    [deleteAccount]
+  );
+
+  // Handlers: Complete Cloud-Aware CSV & PDF Export
+  const resolveLatestDataForExport = useCallback(async () => {
+    let targetBike = activeBike;
+    let exportRecords = activeBikeRecords;
+    let exportReminders = activeBikeReminders;
+
+    if (user?.uid && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+      try {
+        const [cloudBikes, cloudRecs, cloudRems] = await Promise.all([
+          fetchUserMotorcyclesOnce(user.uid),
+          fetchUserServiceRecordsOnce(user.uid),
+          fetchUserRemindersOnce(user.uid),
+        ]);
+
+        if (cloudBikes.length > 0) {
+          targetBike =
+            cloudBikes.find((b) => b.id === activeBike?.id) || cloudBikes[0] || activeBike;
+        }
+        if (targetBike) {
+          if (cloudRecs.length > 0) {
+            exportRecords = cloudRecs.filter((r) => r.bikeId === targetBike!.id);
+          }
+          if (cloudRems.length > 0) {
+            exportReminders = cloudRems.filter((r) => r.bikeId === targetBike!.id);
+          }
+        }
+      } catch (err) {
+        console.warn('Export fallback to local state due to offline/fetch error:', err);
+      }
+    }
+
+    return { targetBike, exportRecords, exportReminders };
+  }, [activeBike, activeBikeRecords, activeBikeReminders, user?.uid]);
+
+  const handleDownloadPrintablePdfReport = useCallback(async () => {
+    const { targetBike, exportRecords, exportReminders } = await resolveLatestDataForExport();
+    generatePrintableMaintenancePdfReport(targetBike, exportRecords, exportReminders);
+  }, [resolveLatestDataForExport]);
+
+  // Render Secret Admin Portal when routed via `#admin`, `/admin`, or `?admin=1`
   if (isAdminPortal) {
-    // 1. Loading state while Firebase Auth initializes session
     if (authLoading) {
       return (
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 font-sans selection:bg-[#FF6B00] selection:text-white">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-8 h-8 border-2 border-[#FF6B00] border-t-transparent rounded-full animate-spin" />
-            <p className="text-xs text-slate-400 font-medium">Verifying administrator credentials...</p>
-          </div>
+        <div className="min-h-screen bg-[#070B12] text-white flex flex-col items-center justify-center p-6">
+          <div className="w-10 h-10 rounded-full border-3 border-[#FF6B00] border-t-transparent animate-spin mb-3" />
+          <p className="text-xs font-bold text-slate-400">Verifying administrator credentials...</p>
         </div>
       );
     }
 
-    // 2. Reject authenticated non-admin users
     if (user && !isExactAdmin) {
       return (
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center px-4 py-12 font-sans selection:bg-[#FF6B00] selection:text-white">
-          <div className="w-full max-w-md p-6 sm:p-8 bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl space-y-5 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mx-auto text-xl font-bold">
-              ✕
+        <div className="min-h-screen bg-[#070B12] text-white flex flex-col items-center justify-center p-4">
+          <div className="max-w-md w-full bg-[#0E1525] border border-red-500/30 rounded-3xl p-6 sm:p-8 text-center space-y-4 shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center mx-auto font-black text-xl">
+              !
             </div>
-            <div className="space-y-1">
-              <h2 className="text-lg font-black text-white">Access Denied</h2>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                The MotoCare Admin Portal is strictly restricted to administrator <span className="font-mono text-amber-300">mustetm7@gmail.com</span>.
-              </p>
-              <p className="text-[11px] text-slate-500 pt-1">
-                You are currently signed in as <span className="font-mono text-slate-300">{user.email}</span>.
-              </p>
-            </div>
+            <h1 className="text-xl font-black text-white">Access Denied</h1>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Administrator access only. You are currently signed in as{' '}
+              <span className="font-mono text-white">{user.email}</span>.
+            </p>
             <button
               type="button"
               onClick={handleCloseAdminPortal}
-              className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition-colors cursor-pointer"
+              className="w-full py-3 rounded-2xl bg-[#FF6B00] hover:bg-[#e05e00] text-slate-950 font-black text-xs transition-all cursor-pointer"
             >
               ← Return to Garage
             </button>
@@ -1284,305 +1106,270 @@ export default function App() {
       );
     }
 
-    // 3. Render AdminUsersPortal for exact admin or unauthenticated owner gate
-    return (
-      <AdminUsersPortal
-        users={userAccounts}
-        onApprovePro={handleApprovePro}
-        onRevokePro={handleRevokePro}
-        onAddUser={handleAddUser}
-        onResetUsersToDefault={handleResetUsersToDefault}
-        onReturnToApp={handleCloseAdminPortal}
-      />
-    );
+    return <AdminUsersPortal onReturnToApp={handleCloseAdminPortal} />;
   }
 
   return (
     <div
       data-testid="app-root-container"
       data-theme={theme}
-      className={`min-h-screen flex flex-col font-sans selection:bg-[#FF6B00] selection:text-white transition-colors duration-200 ${
-        theme === 'dark'
-          ? 'dark bg-slate-950 text-slate-100'
-          : 'bg-[#F8F9FA] text-slate-900'
+      className={`min-h-screen bg-[#F8F9FA] text-slate-800 pb-28 selection:bg-[#FF6B00] selection:text-white transition-colors duration-200 ${
+        theme === 'dark' ? 'dark bg-[#070B12] text-slate-100' : ''
       }`}
     >
-      {/* Top Navbar matching screenshots */}
+      {/* Top Navbar */}
       <Navbar
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(tab) => {
+          setShowWelcomeScreen(false);
+          setActiveTab(tab);
+        }}
         motorcycles={motorcycles}
         activeBike={activeBike}
         subscription={subscription}
-        hasProAccess={hasProAccess}
+        hasProAccess={isPro}
         syncStatus={syncStatus}
-        onRetrySync={handleRetrySync}
+        onRetrySync={triggerFlushOfflineQueue}
         pendingConflictsCount={activeConflicts.length}
-        onOpenConflictReview={() => setIsConflictModalOpen(true)}
-        onSelectBike={handleSelectBike}
+        onOpenConflictReview={() => setIsMigrationModalOpen(true)}
+        onSelectBike={(id) => {
+          setActiveBikeId(id);
+          setShowWelcomeScreen(false);
+        }}
         onOpenAddBike={() => {
           if (!user) {
             setAuthScreenInitialMode('register');
-            setIsAuthScreenOpen(true);
-            return;
-          }
-          if (!isPro && motorcycles.length >= 1) {
-            setIsPaywallOpen(true);
+            setShowAuthScreen(true);
             return;
           }
           setEditingBike(null);
-          setGarageModalInitialCustomMode(false);
-          setIsGarageModalOpen(true);
+          setGarageCustomMode(false);
+          setGarageModalOpen(true);
         }}
         onOpenAddService={() => {
-          setServiceModalInitialTitle('');
-          setServiceModalInitialReminderId(undefined);
-          setIsServiceModalOpen(true);
+          setPrefillReminder(null);
+          setServiceModalOpen(true);
         }}
-        onOpenPaywall={() => setIsPaywallOpen(true)}
-        onGoToHome={() => {
-          setIsAuthScreenOpen(false);
-          setActiveTab('garage');
-        }}
-        onOpenAuthScreen={(mode = 'signin') => {
-          setAuthScreenInitialMode(mode);
-          setIsAuthScreenOpen(true);
-        }}
+        onOpenPaywall={() => setPaywallModalOpen(true)}
+        onOpenCasaBooklet={() => setCasaBookletOpen(true)}
+        onGoToHome={() => setShowWelcomeScreen(true)}
         onOpenAdminPortal={isExactAdmin ? handleOpenAdminPortal : undefined}
         overdueCount={overdueCount}
         overdueReminders={overdueReminders}
         onOpenServiceForReminder={(rem) => {
-          setServiceModalInitialTitle(rem.title);
-          setServiceModalInitialReminderId(rem.id);
-          setIsServiceModalOpen(true);
+          setPrefillReminder(rem);
+          setServiceModalOpen(true);
+        }}
+        onOpenAuthScreen={(mode = 'signin') => {
+          setAuthScreenInitialMode(mode);
+          setShowAuthScreen(true);
         }}
         theme={theme}
         onToggleTheme={handleToggleTheme}
-        serviceRecords={serviceRecords}
-        reminders={reminders}
-        onDownloadPdfReport={() => {
-          generatePrintableMaintenancePdfReport(activeBike, serviceRecords, reminders);
-        }}
+        serviceRecords={activeBikeRecords}
+        reminders={activeBikeReminders}
+        onDownloadPdfReport={handleDownloadPrintablePdfReport}
+        onDeleteAccount={handlePermanentAccountDelete}
       />
 
-      {/* Main App Container matching mobile app width on desktop */}
-      <main className="flex-1 max-w-md w-full mx-auto px-4 py-5 space-y-5 relative pb-24">
-        {!user ? (
-          isAuthScreenOpen ? (
-            <AccountRegistrationScreen
-              initialMode={authScreenInitialMode}
-              onBack={() => setIsAuthScreenOpen(false)}
-            />
-          ) : (
-            <OnboardingView
-              isAuthenticated={false}
-              onStartOnboarding={() => {
-                setAuthScreenInitialMode('register');
-                setIsAuthScreenOpen(true);
-              }}
-              onAddMotorcycle={() => {
-                setAuthScreenInitialMode('register');
-                setIsAuthScreenOpen(true);
-              }}
-            />
-          )
-        ) : motorcycles.length === 0 && !(activeTab === 'logbook' && serviceRecords.length > 0) ? (
+      {/* Registration Success Toast Banner */}
+      {registrationToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-20 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md p-4 rounded-2xl bg-slate-900 text-white border border-emerald-500/50 shadow-2xl flex items-start gap-3 animate-fade-in"
+        >
+          <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0 text-emerald-400">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div className="flex-1 text-xs leading-relaxed">
+            <div className="font-extrabold text-emerald-300 text-sm flex items-center gap-1.5">
+              <span>Registered to Your Garage!</span>
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            </div>
+            <p className="text-slate-200 mt-0.5">
+              <strong>{registrationToast.bikeName}</strong> is now active with{' '}
+              <strong>{registrationToast.reminderCount} automatic PMS reminders</strong> configured.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Container */}
+      <main className="max-w-2xl lg:max-w-4xl mx-auto px-4 sm:px-6 pt-5">
+        {showAuthScreen && !user ? (
+          <AccountRegistrationScreen
+            initialMode={authScreenInitialMode}
+            onBack={() => setShowAuthScreen(false)}
+          />
+        ) : !user ? (
+          <OnboardingView
+            isAuthenticated={false}
+            onStartOnboarding={() => {
+              setAuthScreenInitialMode('register');
+              setShowAuthScreen(true);
+            }}
+            onAddMotorcycle={() => {
+              setAuthScreenInitialMode('register');
+              setShowAuthScreen(true);
+            }}
+          />
+        ) : !activeBike || motorcycles.length === 0 || showWelcomeScreen ? (
           <OnboardingView
             isAuthenticated={true}
             userName={user.displayName || user.email}
             onAddMotorcycle={() => {
               setEditingBike(null);
-              setGarageModalInitialCustomMode(false);
-              setIsGarageModalOpen(true);
+              setGarageCustomMode(false);
+              setGarageModalOpen(true);
             }}
             onAddCustomMotorcycle={() => {
               setEditingBike(null);
-              setGarageModalInitialCustomMode(true);
-              setIsGarageModalOpen(true);
+              setGarageCustomMode(true);
+              setGarageModalOpen(true);
             }}
           />
         ) : (
-          <>
-            {/* Urgent In-App Push Notification Alert Banner with Vibration & Quick Action */}
-            {overdueReminders.length > 0 && !isOverdueBannerDismissed && (
+          <div className="space-y-5">
+            {!overdueBannerDismissed && overdueReminders.length > 0 && (
               <OverdueAlertBanner
                 overdueReminders={overdueReminders}
                 bike={activeBike}
                 onOpenServiceModal={(rem) => {
-                  setServiceModalInitialTitle(rem.title);
-                  setServiceModalInitialReminderId(rem.id);
-                  setIsServiceModalOpen(true);
+                  setPrefillReminder(rem);
+                  setServiceModalOpen(true);
                 }}
-                onDismiss={() => setIsOverdueBannerDismissed(true)}
+                onDismiss={() => setOverdueBannerDismissed(true)}
               />
             )}
 
-            {/* Garage & Schedule Tabs */}
-            {(activeTab === 'garage' || activeTab === 'reminders') && (
-              <div className="space-y-6 animate-in fade-in duration-150">
-                {/* Active Bike Profile, Odometer & Quick Actions matching screenshot 2 */}
-                <GarageHeader
-                  bike={activeBike}
-                  reminders={reminders}
-                  activeTab={activeTab}
-                  onTabChange={setActiveTab}
-                  onAddKm={handleAddKm}
-                  onOpenEditOdometer={() => setIsQuickAddOdoOpen(true)}
-                  onOpenEditBike={() => {
-                    setEditingBike(activeBike);
-                    setGarageModalInitialCustomMode(false);
-                    setIsGarageModalOpen(true);
-                  }}
-                  onOpenGpsRide={() => {
-                    if (!isPro) {
-                      setIsPaywallOpen(true);
-                      return;
-                    }
-                    setIsGpsModalOpen(true);
-                  }}
-                  onOpenPaywall={() => setIsPaywallOpen(true)}
-                  isPro={isPro}
-                />
+            <GarageHeader
+              bike={activeBike}
+              reminders={activeBikeReminders}
+              activeTab={activeTab}
+              onTabChange={(tab) => setActiveTab(tab)}
+              onAddKm={handleAddKm}
+              onOpenEditOdometer={() => setQuickOdoModalOpen(true)}
+              onOpenEditBike={() => {
+                setEditingBike(activeBike);
+                setGarageCustomMode(Boolean(activeBike.isCustom));
+                setGarageModalOpen(true);
+              }}
+              onOpenGpsRide={() => setGpsTrackerOpen(true)}
+              onOpenPaywall={() => setPaywallModalOpen(true)}
+              isPro={isPro}
+            />
 
-                {/* Maintenance Schedule Header matching screenshot 2 */}
-                <div className="flex items-center justify-between pt-1">
-                  <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-                    Maintenance Schedule
-                  </h2>
+            {activeTab === 'reminders' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-extrabold text-slate-900">
+                      Maintenance Schedule
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Automatic kilometer &amp; date interval tracking for your {activeBike.brand}{' '}
+                      {activeBike.model}
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
                       if (!isPro && reminders.length >= 2) {
-                        setIsPaywallOpen(true);
+                        setPaywallModalOpen(true);
                         return;
                       }
                       setEditingReminder(null);
-                      setIsReminderModalOpen(true);
+                      setReminderModalOpen(true);
                     }}
-                    className="text-xs font-bold text-[#FF6B00] hover:underline flex items-center gap-1"
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold text-xs shadow-sm transition-colors cursor-pointer"
                   >
-                    <span>+ Add Task</span>
+                    <Plus className="w-4 h-4 stroke-[2.5]" />
+                    <span>Add Reminder</span>
                   </button>
                 </div>
 
-                {/* Maintenance Cards List matching screenshots 2, 3, 4 */}
-                <div className="space-y-3.5">
-                  {activeReminders.map((reminder) => (
-                    <MaintenanceCard
-                      key={reminder.id}
-                      reminder={reminder}
-                      bike={activeBike}
-                      onComplete={(rem) => {
-                        setServiceModalInitialTitle(rem.title);
-                        setServiceModalInitialReminderId(rem.id);
-                        setIsServiceModalOpen(true);
+                {activeBikeReminders.length === 0 ? (
+                  <div className="p-8 rounded-2xl bg-white border border-slate-100 text-center space-y-3">
+                    <p className="text-sm font-bold text-slate-700">
+                      No maintenance reminders configured yet.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingReminder(null);
+                        setReminderModalOpen(true);
                       }}
-                      onEdit={(rem) => {
-                        setEditingReminder(rem);
-                        setIsReminderModalOpen(true);
-                      }}
-                      onDelete={handleDeleteReminder}
-                    />
-                  ))}
-                </div>
+                      className="px-4 py-2 rounded-xl bg-[#FF6B00] text-white font-bold text-xs cursor-pointer"
+                    >
+                      + Create First Reminder
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3.5">
+                    {activeBikeReminders.map((rem) => (
+                      <MaintenanceCard
+                        key={rem.id}
+                        reminder={rem}
+                        bike={activeBike}
+                        onComplete={(r) => {
+                          setPrefillReminder(r);
+                          setServiceModalOpen(true);
+                        }}
+                        onEdit={(r) => {
+                          setEditingReminder(r);
+                          setReminderModalOpen(true);
+                        }}
+                        onDelete={handleDeleteReminder}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Service History Tab */}
-            {activeTab === 'logbook' && (
-              <div className="animate-in fade-in duration-150">
-                <ServiceLogbookView
-                  records={serviceRecords}
-                  reminders={reminders}
-                  bike={activeBike}
-                  subscription={subscription}
-                  hasProAccess={hasProAccess}
-                  onOpenAddService={() => {
-                    setServiceModalInitialTitle('');
-                    setServiceModalInitialReminderId(undefined);
-                    setIsServiceModalOpen(true);
-                  }}
-                  onOpenCasaBooklet={() => {}}
-                  onDeleteRecord={handleDeleteServiceRecord}
-                  onOpenPaywall={() => setIsPaywallOpen(true)}
-                  onBack={() => setActiveTab('garage')}
-                />
-              </div>
+            {activeTab === 'history' && (
+              <ServiceLogbookView
+                records={activeBikeRecords}
+                reminders={activeBikeReminders}
+                bike={activeBike}
+                subscription={subscription}
+                hasProAccess={isPro}
+                onOpenAddService={() => {
+                  setPrefillReminder(null);
+                  setServiceModalOpen(true);
+                }}
+                onOpenCasaBooklet={() => setCasaBookletOpen(true)}
+                onDeleteRecord={handleDeleteServiceRecord}
+                onOpenPaywall={() => setPaywallModalOpen(true)}
+                onBack={() => setActiveTab('reminders')}
+              />
             )}
 
-            {/* Garage / LTO Registration Tab */}
             {activeTab === 'lto' && (
-              <div className="animate-in fade-in duration-150">
-                <LtoView
-                  bike={activeBike}
-                  onUpdatePlate={async (newPlate) => {
-                    const nowIso = new Date().toISOString();
-                    const targetBikeId = activeBike?.id;
-                    // Capture original base version BEFORE optimistic local state update
-                    const preEditBike = motorcycles.find((b) => b.id === targetBikeId);
-                    setMotorcycles(
-                      motorcycles.map((b) =>
-                        b.id === targetBikeId
-                          ? {
-                              ...b,
-                              licensePlate: newPlate,
-                              updatedAt: nowIso,
-                              timestampSource: 'client_pending' as const,
-                            }
-                          : b
-                      )
-                    );
-                    sounds.playSuccess();
-
-                    if (user?.uid && targetBikeId) {
-                      setSyncStatus('syncing');
-                      const res = await executeDirectOnlineWrite({
-                        userId: user.uid,
-                        entity: 'motorcycle',
-                        action: 'update_fields',
-                        targetId: targetBikeId,
-                        payload: { licensePlate: newPlate },
-                        preEditRecord: preEditBike,
-                      });
-                      if (res.status === 'version_conflict') {
-                        setSyncStatus('sync_error');
-                      } else {
-                        setSyncStatus(res.status === 'synced' ? 'synced' : 'offline_cache');
-                      }
-                    }
-                  }}
-                  onBack={() => setActiveTab('garage')}
-                />
-              </div>
+              <LtoView
+                bike={activeBike}
+                onUpdatePlate={handleUpdatePlate}
+                onBack={() => setActiveTab('reminders')}
+              />
             )}
 
-            {/* Floating Action Button (+ New Task) matching screenshots 2, 3, 4 */}
-            {(activeTab === 'garage' || activeTab === 'reminders') && (
-              <div className="fixed bottom-6 right-4 sm:right-auto sm:left-1/2 sm:translate-x-28 z-30">
-                <button
-                  type="button"
-                  onClick={() => {
-                    sounds.playClick();
-                    if (!isPro && reminders.length >= 2) {
-                      setIsPaywallOpen(true);
-                      return;
-                    }
-                    setEditingReminder(null);
-                    setIsReminderModalOpen(true);
-                  }}
-                  className="px-5 py-3 rounded-2xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-bold text-xs shadow-xl shadow-[#FF6B00]/35 flex items-center gap-1.5 transition-all active:scale-95 hover:scale-105"
-                >
-                  <Plus className="w-4 h-4 stroke-[3]" />
-                  <span>New Task</span>
-                </button>
-              </div>
+            {activeTab === 'preride' && (
+              <PreRideChecklistView
+                items={preRideItems}
+                bike={activeBike}
+                onToggleItem={handleTogglePreRideItem}
+                onResetAll={handleResetPreRideAll}
+                onCheckAll={handleCheckPreRideAll}
+                onLogInspectionAsService={handleLogPreRideInspectionAsService}
+              />
             )}
-          </>
+          </div>
         )}
 
-        {/* Clean Footer with Admin Portal Access (Strictly restricted to verified mustetm7@gmail.com) */}
+        {/* Discrete Footer with Admin Access Link (Visible Only to Verified Owner) */}
         <footer className="pt-8 pb-4 text-center text-[10px] text-slate-400 space-y-1.5">
-          <p>MotoCare PH • Motorcycle Maintenance & Digital Garage</p>
+          <p>MotoCare PH • Motorcycle Maintenance &amp; Digital Garage</p>
           {isExactAdmin && (
             <div>
               <button
@@ -1597,107 +1384,112 @@ export default function App() {
         </footer>
       </main>
 
-      {/* Lazy-Loaded Modals */}
-      <React.Suspense fallback={null}>
-        {isQuickAddOdoOpen && (
-          <QuickAddOdometerModal
-            isOpen={isQuickAddOdoOpen}
-            onClose={() => setIsQuickAddOdoOpen(false)}
-            bike={activeBike}
-            presets={quickPresets}
-            onSavePresets={setQuickPresets}
-            onUpdateOdometer={handleUpdateOdometer}
-          />
-        )}
-
-        { Boolean(user) && isGarageModalOpen && (
-          <GarageModal
-            isOpen={isGarageModalOpen}
-            onClose={() => setIsGarageModalOpen(false)}
-            bike={editingBike}
-            subscription={subscription}
-            hasProAccess={hasProAccess}
-            existingCount={motorcycles.length}
-            initialCustomMode={garageModalInitialCustomMode}
-            onSave={handleSaveBike}
-            onDelete={handleDeleteBike}
-            canDelete={true}
-            onOpenPaywall={() => {
-              setIsGarageModalOpen(false);
-              setIsPaywallOpen(true);
-            }}
-          />
-        )}
-
-        {isReminderModalOpen && (
-          <AddReminderModal
-            isOpen={isReminderModalOpen}
-            onClose={() => setIsReminderModalOpen(false)}
-            bike={activeBike}
-            editingReminder={editingReminder}
-            onSave={handleSaveReminder}
-            onDelete={handleDeleteReminder}
-          />
-        )}
-
-        {isServiceModalOpen && (
-          <AddServiceRecordModal
-            isOpen={isServiceModalOpen}
-            onClose={() => setIsServiceModalOpen(false)}
-            bike={activeBike}
-            reminders={reminders}
-            initialTitle={serviceModalInitialTitle}
-            initialReminderId={serviceModalInitialReminderId}
-            onSave={handleSaveServiceRecord}
-          />
-        )}
-
-        {isPaywallOpen && (
-          <PaywallModal
-            isOpen={isPaywallOpen}
-            onClose={() => setIsPaywallOpen(false)}
-            subscription={subscription}
-            onSubmitReference={handleSubmitReference}
-            onCancelSubscription={handleCancelSubscription}
-            isAlreadyPending={isAlreadyPending}
-            existingPendingRef={existingPendingRef}
-          />
-        )}
-
-        {/* Safe Local Data Migration Preview & Conflict Resolution Modal */}
-        {(isMigrationModalOpen || (isConflictModalOpen && activeConflicts.length > 0)) && (
-          <LegacyMigrationModal
-            isOpen={isMigrationModalOpen || (isConflictModalOpen && activeConflicts.length > 0)}
-            dryRun={isMigrationModalOpen ? migrationDryRun : null}
-            activeConflicts={activeConflicts}
-            isSyncing={isMigrating || syncStatus === 'syncing'}
-            onConfirmMigrate={handleConfirmLegacyMigration}
-            onSkipMigration={handleSkipLegacyMigration}
-            onResolveConflict={handleResolveConflict}
-            onClose={() => setIsConflictModalOpen(false)}
-          />
-        )}
-
-        {/* GPS Ride Tracker Modal */}
-        {isGpsModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <GpsRideTrackerSheet
-              bike={activeBike}
-              subscription={subscription}
-              hasProAccess={hasProAccess}
-              onFinishRide={handleFinishGpsRide}
-              onClose={() => setIsGpsModalOpen(false)}
-              onOpenPaywall={() => {
-                setIsGpsModalOpen(false);
-                setIsPaywallOpen(true);
-              }}
-            />
-          </div>
-        )}
-      </React.Suspense>
-
-      {/* Offline Connectivity Toast for PWA */}
       <OfflineIndicator />
+
+      {/* Modals */}
+      <GarageModal
+        isOpen={garageModalOpen}
+        onClose={() => {
+          setGarageModalOpen(false);
+          setGarageCustomMode(false);
+        }}
+        bike={editingBike}
+        subscription={subscription}
+        hasProAccess={isPro}
+        existingCount={motorcycles.length}
+        initialCustomMode={garageCustomMode}
+        onSave={handleSaveBike}
+        onDelete={handleDeleteBike}
+        onOpenPaywall={() => setPaywallModalOpen(true)}
+      />
+
+      {activeBike && (
+        <AddServiceRecordModal
+          isOpen={serviceModalOpen}
+          onClose={() => {
+            setServiceModalOpen(false);
+            setPrefillReminder(null);
+          }}
+          bike={activeBike}
+          reminders={activeBikeReminders}
+          initialTitle={prefillReminder?.title}
+          initialReminderId={prefillReminder?.id}
+          onSave={handleSaveServiceRecord}
+        />
+      )}
+
+      {activeBike && (
+        <AddReminderModal
+          isOpen={reminderModalOpen}
+          onClose={() => {
+            setReminderModalOpen(false);
+            setEditingReminder(null);
+          }}
+          bike={activeBike}
+          editingReminder={editingReminder}
+          onSave={handleSaveReminder}
+          onDelete={handleDeleteReminder}
+        />
+      )}
+
+      {activeBike && (
+        <QuickAddOdometerModal
+          isOpen={quickOdoModalOpen}
+          onClose={() => setQuickOdoModalOpen(false)}
+          bike={activeBike}
+          presets={quickKmPresets}
+          onSavePresets={setQuickKmPresets}
+          onUpdateOdometer={handleUpdateOdometer}
+        />
+      )}
+
+      <PaywallModal
+        isOpen={paywallModalOpen}
+        onClose={() => setPaywallModalOpen(false)}
+        subscription={subscription}
+        hasProAccess={isPro}
+        onSubmitReference={handleSubmitReference}
+        onCancelSubscription={handleCancelSubscription}
+      />
+
+      {activeBike && (
+        <CasaBookletModal
+          isOpen={casaBookletOpen}
+          onClose={() => setCasaBookletOpen(false)}
+          bike={activeBike}
+          records={activeBikeRecords}
+          subscription={subscription}
+          hasProAccess={isPro}
+          onOpenPaywall={() => setPaywallModalOpen(true)}
+        />
+      )}
+
+      {activeBike && gpsTrackerOpen && (
+        <GpsRideTrackerSheet
+          bike={activeBike}
+          subscription={subscription}
+          hasProAccess={isPro}
+          onFinishRide={handleFinishGpsRide}
+          onOpenPaywall={() => {
+            setGpsTrackerOpen(false);
+            setPaywallModalOpen(true);
+          }}
+          onClose={() => setGpsTrackerOpen(false)}
+        />
+      )}
+
+      <LegacyMigrationModal
+        isOpen={isMigrationModalOpen || activeConflicts.length > 0}
+        dryRun={migrationDryRun}
+        activeConflicts={activeConflicts}
+        isSyncing={isSyncingMigration}
+        onConfirmMigrate={handleConfirmMigration}
+        onSkipMigration={handleSkipMigration}
+        onResolveConflict={handleResolveConflict}
+        onClose={() => setIsMigrationModalOpen(false)}
+      />
     </div>
   );
 }
+
+export default App;
