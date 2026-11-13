@@ -1338,6 +1338,69 @@ export async function runRulesEmulatorSuite(): Promise<{
 
       await assertFails(batch.commit());
     });
+
+    await testCase('33. Admin can revoke Pro access on /users/{uid} while ordinary riders cannot revoke or modify subscriptions -> ALLOW admin / DENY rider', async () => {
+      const futureExpiry = Timestamp.fromDate(new Date(Date.now() + 30 * 86400_000));
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await db.doc('users/rider_to_revoke').set({
+          id: 'rider_to_revoke',
+          uid: 'rider_to_revoke',
+          email: 'pro_active@example.com',
+          role: 'rider',
+          subscriptionTier: 'pro',
+          subscriptionStatus: 'active',
+          paymentStatus: 'active_pro',
+          expiryDate: futureExpiry,
+          lastPaymentId: 'sub_active_1',
+          pendingSubmissionId: null,
+          bikeCount: 1,
+        });
+      });
+
+      const attackerCtx = testEnv.authenticatedContext('attacker_rider', {
+        email: 'attacker@example.com',
+        email_verified: true,
+      });
+      await assertFails(
+        attackerCtx.firestore().doc('users/rider_to_revoke').update({
+          subscriptionTier: 'free',
+          subscriptionStatus: 'revoked',
+        })
+      );
+
+      const selfCtx = testEnv.authenticatedContext('rider_to_revoke', {
+        email: 'pro_active@example.com',
+        email_verified: true,
+      });
+      await assertFails(
+        selfCtx.firestore().doc('users/rider_to_revoke').update({
+          subscriptionTier: 'free',
+          subscriptionStatus: 'revoked',
+        })
+      );
+
+      const adminCtx = testEnv.authenticatedContext('owner_admin', {
+        email: 'mustetm7@gmail.com',
+        email_verified: true,
+      });
+      await assertSucceeds(
+        adminCtx.firestore().doc('users/rider_to_revoke').set(
+          {
+            id: 'rider_to_revoke',
+            uid: 'rider_to_revoke',
+            subscriptionTier: 'free',
+            subscriptionStatus: 'revoked',
+            paymentStatus: 'rejected',
+            expiryDate: Timestamp.fromDate(new Date(0)),
+            pendingSubmissionId: null,
+            revokedAt: '2026-11-11T12:00:00.000Z',
+            revokedBy: 'mustetm7@gmail.com',
+          },
+          { merge: true }
+        )
+      );
+    });
   } finally {
     await testEnv.cleanup();
   }

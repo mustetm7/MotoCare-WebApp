@@ -83,7 +83,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [pendingSubmissions, setPendingSubmissions] = useState<PaymentSubmissionRecord[]>([]);
   const [reviewedSubmissions, setReviewedSubmissions] = useState<PaymentSubmissionRecord[]>([]);
   const [firestoreUsers, setFirestoreUsers] = useState<any[]>([]);
-  const [lastUsersCursor, setLastUsersCursor] = useState<any>(null);
+  const lastUsersCursorRef = React.useRef<any>(null);
   const [hasMoreUsers, setHasMoreUsers] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
@@ -100,27 +100,35 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const [reconciliationReport, setReconciliationReport] =
     useState<BikeCountReconciliationReport | null>(null);
 
-  // Load users on demand with getDocs + limit(100)
+  // Load users on demand with getDocs + limit(100).
+  // Uses lastUsersCursorRef instead of state in useCallback dependencies so updating
+  // the pagination cursor never recreates the callback or triggers an infinite useEffect loop.
   const loadUsersOnDemand = useCallback(
     async (reset = true) => {
-      if (!isVerifiedAdmin) return;
+      if (!isVerifiedAdmin) {
+        setLoadingUsers(false);
+        return;
+      }
       setLoadingUsers(true);
       try {
-        const page = await fetchAdminUsersPage(100, reset ? null : lastUsersCursor);
+        const cursor = reset ? null : lastUsersCursorRef.current;
+        const page = await fetchAdminUsersPage(100, cursor);
         if (reset) {
           setFirestoreUsers(page.users);
         } else {
           setFirestoreUsers((prev) => [...prev, ...page.users]);
         }
-        setLastUsersCursor(page.lastDoc);
+        lastUsersCursorRef.current = page.lastDoc;
         setHasMoreUsers(page.hasMore);
-      } catch (err) {
-        console.warn('Admin users on-demand fetch error:', err);
+      } catch (err: any) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('Admin users on-demand fetch error:', msg);
+        setActionError(msg);
       } finally {
         setLoadingUsers(false);
       }
     },
-    [isVerifiedAdmin, lastUsersCursor]
+    [isVerifiedAdmin]
   );
 
   const loadReviewedSubmissionsOnDemand = useCallback(async () => {
@@ -134,18 +142,39 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
       );
       setReviewedSubmissions(combined);
-    } catch (err) {
-      console.warn('Admin reviewed submissions fetch error:', err);
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('Admin reviewed submissions fetch error:', msg);
+      setActionError(msg);
     }
   }, [isVerifiedAdmin]);
+
+  const handleRefreshAdminConsole = useCallback(async () => {
+    if (!isVerifiedAdmin) {
+      setLoadingUsers(false);
+      return;
+    }
+    setLoadingUsers(true);
+    setActionError(null);
+    try {
+      await Promise.all([loadUsersOnDemand(true), loadReviewedSubmissionsOnDemand()]);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, [isVerifiedAdmin, loadUsersOnDemand, loadReviewedSubmissionsOnDemand]);
 
   // Subscribe only to pending_approval paymentSubmissions in real time, and load initial users page once
   useEffect(() => {
     if (!isVerifiedAdmin) return;
 
-    const unsubSubs = subscribeToAllPaymentSubmissions((subs) => {
-      setPendingSubmissions(subs);
-    });
+    const unsubSubs = subscribeToAllPaymentSubmissions(
+      (subs) => {
+        setPendingSubmissions(subs);
+      },
+      (errMsg) => {
+        setActionError(errMsg);
+      }
+    );
 
     loadUsersOnDemand(true);
     loadReviewedSubmissionsOnDemand();
@@ -381,10 +410,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                loadUsersOnDemand(true);
-                loadReviewedSubmissionsOnDemand();
-              }}
+              onClick={handleRefreshAdminConsole}
               disabled={loadingUsers}
               className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Refresh Users and Payment Submissions (limit 100)"
@@ -590,12 +616,13 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             </div>
           ) : (
             filteredSubmissions.map((record) => {
+              const linkedUser = userProfileMap.get(record.userId);
+              const isUserRevoked = linkedUser?.subscriptionStatus === 'revoked';
               const isPending = record.status === 'pending_approval';
-              const isPro = record.status === 'active_pro';
-              const isRejected = record.status === 'rejected';
+              const isPro = record.status === 'active_pro' && !isUserRevoked;
+              const isRejected = record.status === 'rejected' || isUserRevoked;
               const isBusy = actionLoadingId === record.id;
 
-              const linkedUser = userProfileMap.get(record.userId);
               const userExpiryDate = parseExpiryToDate(linkedUser?.expiryDate);
               const userDaysLeft = calculateDaysRemaining(userExpiryDate, now);
               const isUserExpired =

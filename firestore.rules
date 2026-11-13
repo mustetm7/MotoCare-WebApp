@@ -430,16 +430,19 @@ service cloud.firestore {
         existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.pendingSubmissionId == submissionId;
 
-      // Only Admins can approve or reject submissions, and only while status is 'pending_approval'.
+      // Only Admins can approve pending submissions or reject/revoke pending or active_pro submissions.
+      // Double-approvals ('active_pro' -> 'active_pro' or 'rejected' -> 'active_pro') remain strictly blocked.
       allow update: if isAdmin() &&
-        resource.data.status == 'pending_approval' &&
-        request.resource.data.status in ['active_pro', 'rejected'] &&
         request.resource.data.userId == resource.data.userId &&
         request.resource.data.referenceHash == resource.data.referenceHash &&
         request.resource.data.amountPhp == resource.data.amountPhp &&
         (
-          request.resource.data.status == 'rejected' ||
           (
+            resource.data.status in ['pending_approval', 'active_pro'] &&
+            request.resource.data.status == 'rejected'
+          ) ||
+          (
+            resource.data.status == 'pending_approval' &&
             request.resource.data.status == 'active_pro' &&
             getAfter(/databases/$(database)/documents/users/$(resource.data.userId)).data.subscriptionTier == 'pro' &&
             getAfter(/databases/$(database)/documents/users/$(resource.data.userId)).data.lastPaymentId == submissionId &&

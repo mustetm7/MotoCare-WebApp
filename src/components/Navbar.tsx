@@ -90,7 +90,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   onDownloadPdfReport,
   onDeleteAccount,
 }) => {
-  const { user, hasProAccess: contextHasProAccess, signIn, signOut, deleteAccount } = useAuth();
+  const {
+    user,
+    hasProAccess: contextHasProAccess,
+    signIn,
+    signOut,
+    deleteAccount,
+    permanentAccountDelete: contextPermanentAccountDelete,
+  } = useAuth();
   const isExactAdmin =
     Boolean(user) &&
     user?.email?.toLowerCase() === OWNER_ADMIN_EMAIL &&
@@ -177,6 +184,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         await onDeleteAccount(passwordArg);
       } else if (deleteAccount) {
         await deleteAccount(passwordArg);
+      } else if (contextPermanentAccountDelete) {
+        await contextPermanentAccountDelete(passwordArg);
       } else if (user) {
         await permanentlyDeleteUserAccount(user, passwordArg);
       }

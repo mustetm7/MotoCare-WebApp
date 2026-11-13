@@ -18,11 +18,12 @@ import {
   parseExpiryToDate,
   calculateDaysRemaining,
   permanentlyDeleteUserAccount,
+  permanentAccountDelete,
 } from '../utils/firestoreService';
 import { UserSubscription, PaymentProvider, PaymentSubmissionRecord } from '../types';
 import { INITIAL_SUBSCRIPTION } from '../data/initialData';
 
-export { OWNER_ADMIN_EMAIL };
+export { OWNER_ADMIN_EMAIL, permanentAccountDelete, permanentlyDeleteUserAccount };
 
 /**
  * Pure helper to compute authoritative subscription state from Firestore profile & payment records.
@@ -127,6 +128,7 @@ interface AuthContextType {
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   deleteAccount?: (password?: string) => Promise<void>;
+  permanentAccountDelete?: (password?: string) => Promise<void>;
   submitPaymentRef: (
     paymentMethod: PaymentProvider,
     referenceNumber: string,
@@ -147,6 +149,7 @@ const AuthContext = createContext<AuthContextType>({
   resetPassword: async () => {},
   signOut: async () => {},
   deleteAccount: async () => {},
+  permanentAccountDelete: async () => {},
   submitPaymentRef: async () => '',
 });
 
@@ -254,7 +257,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!activeUser) {
       throw new Error('No authenticated user found to delete.');
     }
-    await permanentlyDeleteUserAccount(activeUser, password);
+    await permanentAccountDelete(activeUser, password);
     setUser(null);
     setUserProfile(null);
     setLatestSubmission(null);
@@ -292,6 +295,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resetPassword: handleResetPassword,
         signOut: handleSignOut,
         deleteAccount: handleDeleteAccount,
+        permanentAccountDelete: handleDeleteAccount,
         submitPaymentRef: handleSubmitPaymentRef,
       }}
     >

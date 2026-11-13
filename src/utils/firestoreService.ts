@@ -2094,6 +2094,8 @@ export async function permanentlyDeleteUserAccount(
   };
 }
 
+export const permanentAccountDelete = permanentlyDeleteUserAccount;
+
 /**
  * Submits a GCash / GoTyme Payment Reference for Admin Verification.
  * - Requires verified email (`emailVerified == true`).
@@ -2336,16 +2338,29 @@ export async function revokeProAccessInFirestore(
     await runTransaction(db, async (transaction) => {
       const nowIso = new Date().toISOString();
       const userRef = doc(db, 'users', userId);
+
+      // Perform all transaction reads before any writes
       const userSnap = await transaction.get(userRef);
       const userData = userSnap.exists() ? userSnap.data() : null;
 
+      let subRef: ReturnType<typeof doc> | null = null;
+      let subData: PaymentSubmissionRecord | null = null;
+
       if (submissionId) {
-        const subRef = doc(db, 'paymentSubmissions', submissionId);
+        subRef = doc(db, 'paymentSubmissions', submissionId);
         const subSnap = await transaction.get(subRef);
-
         if (subSnap.exists()) {
-          const subData = subSnap.data() as PaymentSubmissionRecord;
+          subData = subSnap.data() as PaymentSubmissionRecord;
+        }
+      }
 
+      if (subData && subData.userId && subData.userId !== userId) {
+        throw new Error('Payment submission userId does not match target userId.');
+      }
+
+      if (subRef && subData) {
+        // Case 1: Rejecting a pending payment submission
+        if (subData.status === 'pending_approval') {
           transaction.update(subRef, {
             status: 'rejected',
             reviewedAt: nowIso,
@@ -2365,43 +2380,62 @@ export async function revokeProAccessInFirestore(
             );
           }
 
-          if (subData.status === 'pending_approval') {
-            const currentExpiry = parseExpiryToDate(userData?.expiryDate);
-            const hasActivePro =
-              userData?.subscriptionTier === 'pro' &&
-              currentExpiry !== null &&
-              currentExpiry.getTime() > Date.now();
+          const currentExpiry = parseExpiryToDate(userData?.expiryDate);
+          const hasActivePro =
+            userData?.subscriptionTier === 'pro' &&
+            userData?.subscriptionStatus !== 'revoked' &&
+            currentExpiry !== null &&
+            currentExpiry.getTime() > Date.now();
 
-            if (!hasActivePro) {
-              transaction.set(
-                userRef,
-                {
-                  id: userId,
-                  uid: userId,
-                  subscriptionTier: 'free',
-                  subscriptionStatus: 'free',
-                  paymentStatus: 'rejected',
-                  pendingSubmissionId: null,
-                  updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-              );
-            } else {
-              transaction.set(
-                userRef,
-                {
-                  id: userId,
-                  uid: userId,
-                  pendingSubmissionId: null,
-                  updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-              );
-            }
-            return;
+          const shouldClearPending =
+            !userData?.pendingSubmissionId || userData.pendingSubmissionId === submissionId;
+
+          if (!hasActivePro) {
+            transaction.set(
+              userRef,
+              {
+                id: userId,
+                uid: userId,
+                subscriptionTier: 'free',
+                subscriptionStatus: 'free',
+                paymentStatus: 'rejected',
+                ...(shouldClearPending ? { pendingSubmissionId: null } : {}),
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } else if (shouldClearPending) {
+            transaction.set(
+              userRef,
+              {
+                id: userId,
+                uid: userId,
+                pendingSubmissionId: null,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
           }
+          return;
+        }
+
+        // Case 2: If a superseded/older submissionId was passed that does not match the user's
+        // newer active subscription (lastPaymentId), do not overwrite the newer subscription state.
+        if (
+          userData?.lastPaymentId &&
+          userData.lastPaymentId !== submissionId &&
+          userData?.subscriptionTier === 'pro'
+        ) {
+          return;
         }
       }
+
+      // Case 3: Revoking an active Pro subscription (either via an 'active_pro' submissionId or directly by userId).
+      // Do NOT modify the approved /paymentSubmissions/{submissionId} or /paymentReferences/{referenceHash} documents.
+      const shouldClearPendingOnRevoke =
+        !userData?.pendingSubmissionId ||
+        !submissionId ||
+        userData.pendingSubmissionId === submissionId;
 
       transaction.set(
         userRef,
@@ -2412,7 +2446,7 @@ export async function revokeProAccessInFirestore(
           subscriptionStatus: 'revoked',
           paymentStatus: 'rejected',
           expiryDate: Timestamp.fromDate(new Date(0)),
-          pendingSubmissionId: null,
+          ...(shouldClearPendingOnRevoke ? { pendingSubmissionId: null } : {}),
           revokedAt: nowIso,
           revokedBy: adminEmail,
           updatedAt: serverTimestamp(),
@@ -2630,7 +2664,8 @@ export function subscribeToUserPaymentSubmissions(
  * to protect the free Spark plan 50K daily read quota.
  */
 export function subscribeToAllPaymentSubmissions(
-  callback: (submissions: PaymentSubmissionRecord[]) => void
+  callback: (submissions: PaymentSubmissionRecord[]) => void,
+  onError?: (errorMessage: string) => void
 ): () => void {
   const q = query(
     collection(db, 'paymentSubmissions'),
@@ -2647,7 +2682,12 @@ export function subscribeToAllPaymentSubmissions(
       callback(list);
     },
     (error) => {
-      console.warn('Admin payment submissions listener error:', error);
+      const detail = error instanceof Error ? error.message : String(error);
+      const formatted = `Firestore read failed on collection "paymentSubmissions" (path: "/paymentSubmissions?status=pending_approval"): ${detail}`;
+      console.warn(formatted);
+      if (onError) {
+        onError(formatted);
+      }
     }
   );
 }
@@ -2660,18 +2700,26 @@ export async function fetchReviewedPaymentSubmissionsOnce(
   statusFilter: 'active_pro' | 'rejected',
   maxCount = 100
 ): Promise<PaymentSubmissionRecord[]> {
-  const constraints: any[] = [where('status', '==', statusFilter)];
-  if (typeof limit === 'function') {
-    constraints.push(limit(maxCount));
+  const queryPath = `/paymentSubmissions (where status == "${statusFilter}", limit ${maxCount})`;
+  try {
+    const constraints: any[] = [where('status', '==', statusFilter)];
+    if (typeof limit === 'function') {
+      constraints.push(limit(maxCount));
+    }
+    const q = query(collection(db, 'paymentSubmissions'), ...constraints);
+    const snap = await getDocs(q);
+    const list: PaymentSubmissionRecord[] = [];
+    snap.forEach((docSnap) => {
+      list.push(docSnap.data() as PaymentSubmissionRecord);
+    });
+    list.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+    return list;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Firestore read failed on collection "paymentSubmissions" (path: ${queryPath}): ${detail}`
+    );
   }
-  const q = query(collection(db, 'paymentSubmissions'), ...constraints);
-  const snap = await getDocs(q);
-  const list: PaymentSubmissionRecord[] = [];
-  snap.forEach((docSnap) => {
-    list.push(docSnap.data() as PaymentSubmissionRecord);
-  });
-  list.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-  return list;
 }
 
 /**
@@ -2687,26 +2735,34 @@ export async function fetchAdminUsersPage(
   lastDoc: QueryDocumentSnapshot<DocumentData> | null;
   hasMore: boolean;
 }> {
-  const colRef = collection(db, 'users');
-  const constraints: any[] = [];
-  if (lastDoc && typeof startAfter === 'function') {
-    constraints.push(startAfter(lastDoc));
+  const queryPath = lastDoc
+    ? `/users (startAfter cursor, limit ${pageSize})`
+    : `/users (limit ${pageSize})`;
+  try {
+    const colRef = collection(db, 'users');
+    const constraints: any[] = [];
+    if (lastDoc && typeof startAfter === 'function') {
+      constraints.push(startAfter(lastDoc));
+    }
+    if (typeof limit === 'function') {
+      constraints.push(limit(pageSize));
+    }
+    const q = constraints.length > 0 ? query(colRef, ...constraints) : query(colRef);
+    const snap = await getDocs(q);
+    const users: any[] = [];
+    snap.forEach((docSnap) => {
+      users.push(docSnap.data());
+    });
+    const nextCursor = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+    return {
+      users,
+      lastDoc: nextCursor,
+      hasMore: snap.docs.length === pageSize,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Firestore read failed on collection "users" (path: ${queryPath}): ${detail}`);
   }
-  if (typeof limit === 'function') {
-    constraints.push(limit(pageSize));
-  }
-  const q = constraints.length > 0 ? query(colRef, ...constraints) : query(colRef);
-  const snap = await getDocs(q);
-  const users: any[] = [];
-  snap.forEach((docSnap) => {
-    users.push(docSnap.data());
-  });
-  const nextCursor = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
-  return {
-    users,
-    lastDoc: nextCursor,
-    hasMore: snap.docs.length === pageSize,
-  };
 }
 
 export interface BikeCountReconciliationItem {

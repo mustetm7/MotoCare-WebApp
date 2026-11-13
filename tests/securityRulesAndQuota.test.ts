@@ -952,7 +952,67 @@ const cvBikesDb = new Map([['bike-cv', { data: { id: 'bike-cv', userId: 'rider-c
   console.log('✓ SCENARIO 33 PASS: User cannot create a second payment submission while pendingSubmissionId is set.');
 }
 
+// ============================================================================
+// SCENARIO 34: Admin can revoke Pro access on /users/{uid} while ordinary riders
+// cannot revoke or modify another user's subscription
+// ============================================================================
+{
+  const targetBefore = {
+    id: 'rider_pro_revoke',
+    uid: 'rider_pro_revoke',
+    email: 'rider_pro_revoke@example.com',
+    role: 'rider',
+    subscriptionTier: 'pro',
+    subscriptionStatus: 'active',
+    paymentStatus: 'active_pro',
+    expiryDate: { toMillis: () => nowMs + 86400_000 },
+    bikeCount: 1,
+    pendingSubmissionId: null,
+  };
+  const targetRevokedAfter = {
+    ...targetBefore,
+    subscriptionTier: 'free',
+    subscriptionStatus: 'revoked',
+    paymentStatus: 'rejected',
+    expiryDate: { toMillis: () => 0 },
+    pendingSubmissionId: null,
+    revokedAt: '2026-11-11T12:00:00.000Z',
+    revokedBy: 'mustetm7@gmail.com',
+  };
+
+  const otherRider: MockAuth = {
+    uid: 'other_rider',
+    token: { email: 'other@example.com', email_verified: true },
+  };
+  const nonAdminAttempt = evalAllowUpdateUser(
+    otherRider,
+    'rider_pro_revoke',
+    targetBefore,
+    targetRevokedAfter,
+    adminsDb,
+    new Map(),
+    new Map()
+  );
+  assert(!nonAdminAttempt, 'Ordinary rider was able to revoke another user subscription');
+
+  const ownerAdmin: MockAuth = {
+    uid: 'owner_admin',
+    token: { email: 'mustetm7@gmail.com', email_verified: true },
+  };
+  const adminRevokeAllowed = evalAllowUpdateUser(
+    ownerAdmin,
+    'rider_pro_revoke',
+    targetBefore,
+    targetRevokedAfter,
+    adminsDb,
+    new Map(),
+    new Map()
+  );
+  assert(adminRevokeAllowed, 'Verified admin was denied revoking Pro access on /users/{uid}');
+  console.log('✓ SCENARIO 34 PASS: Admin can revoke Pro access on /users/{uid} while ordinary riders are denied.');
+}
+
 console.log('\n========================================================================');
-console.log(' ALL 33 TARGETED VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS');
+console.log(' ALL 34 TARGETED VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS');
 console.log('========================================================================');
 process.exit(0);

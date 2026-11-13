@@ -28,10 +28,14 @@ import {
   fetchUserRemindersOnce,
   fetchUserServiceRecordsOnce,
   canCreateMotorcycleInGarage,
+  approveProAccessInFirestore,
+  revokeProAccessInFirestore,
+  submitPaymentReferenceToFirestore,
 } from '../utils/firestoreService';
 import {
   signUpWithEmail,
   auth,
+  OWNER_ADMIN_EMAIL,
 } from '../utils/firebase';
 import {
   computeAuthoritativeSubscription,
@@ -131,6 +135,7 @@ const inMemoryFirestore: Record<string, Map<string, Record<string, any>>> = {
   reminders: new Map(),
   serviceRecords: new Map(),
   paymentSubmissions: new Map(),
+  paymentReferences: new Map(),
 };
 
 let userDocDeletedWhenBikeCountWasZero = false;
@@ -290,6 +295,17 @@ vi.mock('firebase/firestore', () => {
           stagedOps.push(() => {
             const store = inMemoryFirestore[docRef.colName];
             const existing = store?.get(docRef.id) || {};
+            // Enforce firestore.rules terminal-state lock on paymentSubmissions:
+            // allow update: if isAdmin() && resource.data.status == 'pending_approval'
+            if (
+              docRef.colName === 'paymentSubmissions' &&
+              existing.status &&
+              existing.status !== 'pending_approval'
+            ) {
+              throw new Error(
+                'Missing or insufficient permissions: cannot update paymentSubmission whose status is not pending_approval.'
+              );
+            }
             store?.set(docRef.id, { ...existing, ...payload });
           });
         },
@@ -696,5 +712,182 @@ describe('MotoCare Account Deletion & Same-Email Re-Registration Lifecycle Suite
     const reRegisteredUser = await signUpWithEmail(settingsUserEmail, 'NewPass999!', 'Settings Rider');
     expect(reRegisteredUser).not.toBeNull();
     expect(reRegisteredUser!.uid).not.toBe(uid);
+  });
+
+  it('Verifies Revoke Pro Access regression requirements (A–I): revokes approved Pro without mutating approved paymentSubmissions or paymentReferences, preserves garage data, rejects pending submissions, and protects newer/other subscriptions', async () => {
+    const rider1 = await signUpWithEmail('pro.rider1@motocare.ph', 'Pass1111!', 'Pro Rider One');
+    const rider2 = await signUpWithEmail('pro.rider2@motocare.ph', 'Pass2222!', 'Pro Rider Two');
+    expect(rider1).not.toBeNull();
+    expect(rider2).not.toBeNull();
+
+    const uid1 = rider1!.uid;
+    const uid2 = rider2!.uid;
+
+    (auth as any).currentUser = rider1;
+    await syncUserProfile(rider1!);
+
+    (auth as any).currentUser = rider2;
+    await syncUserProfile(rider2!);
+
+    // Seed Rider 1's motorcycle, reminder, and service record (Requirement H)
+    const rider1Bike: Motorcycle = {
+      id: 'bike-revoke-reg-1',
+      userId: uid1,
+      nickname: 'Adv Tourer',
+      brand: 'Honda',
+      model: 'ADV 160',
+      year: 2025,
+      licensePlate: 'NAA 7788',
+      odometer: 4200,
+      unit: 'km',
+      color: 'Matte Red',
+      specs: {
+        transmission: 'Automatic Scooter',
+        cooling: 'Liquid-Cooled',
+        displacementCc: 160,
+        oilViscosity: '10W-30',
+        oilCapacityLiters: 0.8,
+        tirePressureFrontPsi: 29,
+        tirePressureRearPsi: 33,
+        recommendedServiceIntervalKm: 1500,
+      },
+    };
+    const rider1Rem: MaintenanceReminder = {
+      id: 'rem-revoke-reg-1',
+      userId: uid1,
+      bikeId: rider1Bike.id,
+      title: 'Engine Oil Change',
+      category: 'Engine Oil',
+      intervalKm: 1500,
+      lastCompletedOdo: 3000,
+      nextDueOdo: 4500,
+      lastCompletedDate: '2026-02-10',
+      priority: 'high',
+      notes: 'Honda Pro Scooter Oil',
+      estimatedCostPhp: 420,
+    };
+    const rider1Rec: ServiceRecord = {
+      id: 'rec-revoke-reg-1',
+      userId: uid1,
+      bikeId: rider1Bike.id,
+      date: '2026-02-10',
+      odometer: 3000,
+      title: '3,000 km PMS',
+      category: 'Engine Oil',
+      type: 'Casa / Official 3S',
+      parts: [{ name: 'Engine Oil', costPhp: 420 }],
+      laborCostPhp: 150,
+      totalCostPhp: 570,
+      notes: 'Routine service',
+    };
+
+    (auth as any).currentUser = rider1;
+    await saveMotorcycleToFirestore(rider1Bike, uid1);
+    await saveReminderToFirestore(rider1Rem, uid1);
+    await saveServiceRecordToFirestore(rider1Rec, uid1);
+
+    // Rider 1 submits a payment reference and Admin approves it
+    const subId1 = await submitPaymentReferenceToFirestore({
+      userId: uid1,
+      userEmail: rider1!.email || 'pro.rider1@motocare.ph',
+      userName: rider1!.displayName || 'Pro Rider One',
+      bikeModel: 'Honda ADV 160',
+      bikePlate: 'NAA 7788',
+      paymentMethod: 'gcash',
+      referenceNumber: '9001234567890',
+    });
+
+    await approveProAccessInFirestore(subId1, uid1, OWNER_ADMIN_EMAIL);
+
+    // Rider 2 also submits and gets approved (Requirement I: another active subscription)
+    (auth as any).currentUser = rider2;
+    const subId2 = await submitPaymentReferenceToFirestore({
+      userId: uid2,
+      userEmail: rider2!.email || 'pro.rider2@motocare.ph',
+      userName: rider2!.displayName || 'Pro Rider Two',
+      bikeModel: 'Yamaha NMAX 155',
+      paymentMethod: 'gcash',
+      referenceNumber: '8009876543210',
+    });
+    await approveProAccessInFirestore(subId2, uid2, OWNER_ADMIN_EMAIL);
+
+    const approvedSubSnapshotBefore = { ...inMemoryFirestore.paymentSubmissions.get(subId1)! };
+    const refHash1 = approvedSubSnapshotBefore.referenceHash;
+    const approvedRefSnapshotBefore = { ...inMemoryFirestore.paymentReferences.get(refHash1)! };
+
+    expect(approvedSubSnapshotBefore.status).toBe('active_pro');
+    expect(approvedRefSnapshotBefore.status).toBe('approved');
+    expect(inMemoryFirestore.users.get(uid1)?.subscriptionTier).toBe('pro');
+
+    // A & B: Admin revokes Rider 1's approved Pro subscription
+    await revokeProAccessInFirestore(subId1, uid1, OWNER_ADMIN_EMAIL);
+
+    const revokedUser1 = inMemoryFirestore.users.get(uid1)!;
+    expect(revokedUser1.subscriptionTier).toBe('free');
+    expect(revokedUser1.subscriptionStatus).toBe('revoked');
+    expect(revokedUser1.paymentStatus).toBe('rejected');
+    expect(revokedUser1.pendingSubmissionId).toBeNull();
+    expect(revokedUser1.revokedBy).toBe(OWNER_ADMIN_EMAIL);
+    expect(typeof revokedUser1.revokedAt).toBe('string');
+    expect(revokedUser1.expiryDate.toMillis()).toBe(0);
+
+    // C & D: Approved paymentSubmissions and paymentReferences records remain completely unchanged
+    expect(inMemoryFirestore.paymentSubmissions.get(subId1)).toEqual(approvedSubSnapshotBefore);
+    expect(inMemoryFirestore.paymentReferences.get(refHash1)).toEqual(approvedRefSnapshotBefore);
+
+    // H: Revoking Pro access does NOT delete Rider 1's account, motorcycles, reminders, or service records,
+    // and Rider 1 can continue using MotoCare's Free tier
+    expect(inMemoryAuthUsersByEmail.has('pro.rider1@motocare.ph')).toBe(true);
+    expect(revokedUser1.displayName).toBe('Pro Rider One');
+    expect(revokedUser1.bikeCount).toBe(1);
+    expect(await fetchUserMotorcyclesOnce(uid1)).toHaveLength(1);
+    expect(await fetchUserRemindersOnce(uid1)).toHaveLength(1);
+    expect(await fetchUserServiceRecordsOnce(uid1)).toHaveLength(1);
+
+    const effectiveSubAfterRevoke = computeAuthoritativeSubscription(revokedUser1, null);
+    expect(effectiveSubAfterRevoke.tier).toBe('free');
+    expect(effectiveSubAfterRevoke.status).toBe('revoked');
+
+    // I (Part 1): Rider 2's active Pro subscription is completely untouched
+    const activeUser2 = inMemoryFirestore.users.get(uid2)!;
+    expect(activeUser2.subscriptionTier).toBe('pro');
+    expect(activeUser2.subscriptionStatus).toBe('active');
+
+    // I (Part 2): If Rider 2 renews with a newer approved payment (subId2New), revoking the older
+    // superseded subId2 does NOT overwrite Rider 2's newer active subscription state
+    (auth as any).currentUser = rider2;
+    const subId2New = await submitPaymentReferenceToFirestore({
+      userId: uid2,
+      userEmail: rider2!.email || 'pro.rider2@motocare.ph',
+      userName: rider2!.displayName || 'Pro Rider Two',
+      bikeModel: 'Yamaha NMAX 155',
+      paymentMethod: 'gcash',
+      referenceNumber: '7001122334455',
+    });
+    await approveProAccessInFirestore(subId2New, uid2, OWNER_ADMIN_EMAIL);
+    expect(inMemoryFirestore.users.get(uid2)?.lastPaymentId).toBe(subId2New);
+
+    await revokeProAccessInFirestore(subId2, uid2, OWNER_ADMIN_EMAIL);
+    expect(inMemoryFirestore.users.get(uid2)?.subscriptionTier).toBe('pro');
+    expect(inMemoryFirestore.users.get(uid2)?.subscriptionStatus).toBe('active');
+    expect(inMemoryFirestore.users.get(uid2)?.lastPaymentId).toBe(subId2New);
+
+    // G: Admin can still reject a pending payment submission using the existing rejection workflow
+    (auth as any).currentUser = rider1;
+    const pendingSubId = await submitPaymentReferenceToFirestore({
+      userId: uid1,
+      userEmail: rider1!.email || 'pro.rider1@motocare.ph',
+      userName: rider1!.displayName || 'Pro Rider One',
+      bikeModel: 'Honda ADV 160',
+      paymentMethod: 'gcash',
+      referenceNumber: '6005544332211',
+    });
+    expect(inMemoryFirestore.paymentSubmissions.get(pendingSubId)?.status).toBe('pending_approval');
+    expect(inMemoryFirestore.users.get(uid1)?.pendingSubmissionId).toBe(pendingSubId);
+
+    await revokeProAccessInFirestore(pendingSubId, uid1, OWNER_ADMIN_EMAIL);
+    expect(inMemoryFirestore.paymentSubmissions.get(pendingSubId)?.status).toBe('rejected');
+    expect(inMemoryFirestore.users.get(uid1)?.pendingSubmissionId).toBeNull();
+    expect(inMemoryFirestore.users.get(uid1)?.subscriptionTier).toBe('free');
   });
 });
