@@ -153,6 +153,31 @@
         "createdAt": { "type": "string", "description": "Creation timestamp." }
       },
       "required": ["id", "status", "createdAt"]
+    },
+    "ExpenseEntry": {
+      "title": "ExpenseEntry",
+      "description": "Pro-only fuel log and motorcycle expense entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique expense entry ID." },
+        "userId": { "type": "string", "description": "Owner user ID." },
+        "bikeId": { "type": "string", "description": "Target motorcycle ID." },
+        "type": {
+          "type": "string",
+          "description": "Expense category.",
+          "enum": ["Gas", "Maintenance", "Registration (LTO)", "Insurance", "Parking-Toll", "Iba pa"]
+        },
+        "date": { "type": "string", "description": "Expense date in YYYY-MM-DD (Asia/Manila)." },
+        "monthKey": { "type": "string", "description": "Calendar month key in YYYY-MM (Asia/Manila)." },
+        "amountPhp": { "type": "number", "description": "Positive amount spent in Philippine Pesos." },
+        "liters": { "type": "number", "description": "Positive liters filled (for Gas entries)." },
+        "odometerKm": { "type": "number", "description": "Odometer reading in km (for Gas entries)." },
+        "isFullTank": { "type": "boolean", "description": "Whether the fuel fill-up was a full tank." },
+        "note": { "type": "string", "description": "Optional short note (max 100 characters)." },
+        "createdAt": { "type": "string", "description": "Creation timestamp." },
+        "updatedAt": { "type": "string", "description": "Last update timestamp." }
+      },
+      "required": ["id", "userId", "bikeId", "type", "date", "monthKey", "amountPhp"]
     }
   },
   "firestore": {
@@ -183,6 +208,10 @@
     "/admins/{adminId}": {
       "schema": { "$ref": "AdminDoc" },
       "description": "Verified system administrators."
+    },
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "ExpenseEntry" },
+      "description": "Pro-only motorcycle fuel and monthly expense entries."
     }
   }
 }

@@ -59,6 +59,7 @@ const ALLOWED_USER_KEYS = new Set([
   'bikeCount', 'lastBikeId', 'lastBikeAction', 'pendingSubmissionId',
   'lastPaymentId', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay',
   'approvedAt', 'approvedBy', 'revokedAt', 'revokedBy',
+  'grantedBy', 'grantedAt', 'grantNote', 'grantedMonths', 'grantPaid', 'grantedPaidAmountPhp',
   'createdAt', 'updatedAt', 'lastLoginAt',
 ]);
 

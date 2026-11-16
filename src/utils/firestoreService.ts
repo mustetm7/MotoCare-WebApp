@@ -37,6 +37,9 @@ import {
   OfflineMutationItem,
   MigrationLedger,
   CloudSyncStatus,
+  ExpenseEntry,
+  ExpenseEntryType,
+  BikeFuelStats,
 } from '../types';
 import {
   purgeDeletedUserAccountLocalData,
@@ -326,44 +329,48 @@ export function parseExpiryToDate(val: any): Date | null {
 }
 
 /**
- * Date Math Helper: Computes the next monthly expiry date in Asia/Manila (UTC+8)
- * preserving the billing anchor day where possible (clamping to month end e.g. Jan 31 -> Feb 28).
+ * Date Math Helper: Computes the next monthly expiry date in Philippine calendar months (Asia/Manila, UTC+8).
+ * - Approval on day D expires on the same day D of the target month at 11:59:59 PM (23:59:59.999) Manila time.
+ * - If day D does not exist in the target month (e.g., Jan 31 -> Feb), uses the last day of that month.
+ * - Supports adding `monthsToAdd` (default 1) calendar months.
  */
 export function calculateNextMonthlyExpiry(
   baseDate: Date,
-  billingAnchorDay?: number
+  billingAnchorDay?: number,
+  monthsToAdd: number = 1
 ): { expiryIso: string; expiryTimestamp: Timestamp; anchorDay: number } {
+  const validMonths =
+    typeof monthsToAdd === 'number' && Number.isFinite(monthsToAdd) && monthsToAdd >= 1
+      ? Math.floor(monthsToAdd)
+      : 1;
   const manilaOffsetMs = 8 * 60 * 60 * 1000;
   const manilaTime = new Date(baseDate.getTime() + manilaOffsetMs);
 
   const year = manilaTime.getUTCFullYear();
   const month = manilaTime.getUTCMonth();
   const currentDay = manilaTime.getUTCDate();
-  const hours = manilaTime.getUTCHours();
-  const minutes = manilaTime.getUTCMinutes();
-  const seconds = manilaTime.getUTCSeconds();
-  const ms = manilaTime.getUTCMilliseconds();
 
   const anchorDay =
     billingAnchorDay && billingAnchorDay >= 1 && billingAnchorDay <= 31
       ? billingAnchorDay
       : currentDay;
 
-  const targetMonthTotal = month + 1;
+  const targetMonthTotal = month + validMonths;
   const targetYear = year + Math.floor(targetMonthTotal / 12);
   const targetMonth = targetMonthTotal % 12;
 
   const maxDaysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
   const clampedDay = Math.min(anchorDay, maxDaysInTargetMonth);
 
+  // Set expiry time to 11:59:59.999 PM Asia/Manila (UTC+8)
   const nextManilaUtcMs = Date.UTC(
     targetYear,
     targetMonth,
     clampedDay,
-    hours,
-    minutes,
-    seconds,
-    ms
+    23,
+    59,
+    59,
+    999
   );
   const expiryDateObj = new Date(nextManilaUtcMs - manilaOffsetMs);
 
@@ -372,6 +379,60 @@ export function calculateNextMonthlyExpiry(
     expiryTimestamp: Timestamp.fromDate(expiryDateObj),
     anchorDay,
   };
+}
+
+/**
+ * Resolves the billing anchor day (1-31) in Asia/Manila when extending or starting a subscription.
+ * When renewing an active Pro subscription, uses the Manila day of `baseDate` unless `baseDate`
+ * was clamped at the end of a shorter month (e.g. Feb 28) and `storedAnchorDay` was larger (e.g. 31).
+ */
+export function resolveRenewalAnchorDay(baseDate: Date, storedAnchorDay?: unknown): number {
+  const manilaOffsetMs = 8 * 60 * 60 * 1000;
+  const manilaTime = new Date(baseDate.getTime() + manilaOffsetMs);
+  const year = manilaTime.getUTCFullYear();
+  const month = manilaTime.getUTCMonth();
+  const baseDay = manilaTime.getUTCDate();
+  const maxDaysInBaseMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
+  if (
+    typeof storedAnchorDay === 'number' &&
+    storedAnchorDay >= 1 &&
+    storedAnchorDay <= 31 &&
+    baseDay === maxDaysInBaseMonth &&
+    storedAnchorDay > baseDay
+  ) {
+    return storedAnchorDay;
+  }
+  return baseDay;
+}
+
+/**
+ * Formats a Firestore Timestamp, Date, or ISO string in Philippine Time (Asia/Manila, UTC+8).
+ */
+export function formatManilaDateTime(
+  val: any,
+  options: { includeTime?: boolean } = { includeTime: true }
+): string {
+  const date = parseExpiryToDate(val);
+  if (!date || date.getTime() <= 0) return '—';
+  const includeTime = options.includeTime ?? true;
+
+  const manilaOffsetMs = 8 * 60 * 60 * 1000;
+  const m = new Date(date.getTime() + manilaOffsetMs);
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  const datePart = `${months[m.getUTCMonth()]} ${m.getUTCDate()}, ${m.getUTCFullYear()}`;
+  if (!includeTime) {
+    return `${datePart} (PHT)`;
+  }
+  const h24 = m.getUTCHours();
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  const h12 = h24 % 12 || 12;
+  const min = String(m.getUTCMinutes()).padStart(2, '0');
+  const sec = String(m.getUTCSeconds()).padStart(2, '0');
+  return `${datePart}, ${h12}:${min}:${sec} ${ampm} PHT`;
 }
 
 /**
@@ -388,7 +449,7 @@ export function getManilaDay(date: Date): number {
  */
 export function calculateDaysRemaining(expiryVal: any, now: Date = new Date()): number {
   const expiry = parseExpiryToDate(expiryVal);
-  if (!expiry) return 0;
+  if (!expiry || expiry.getTime() <= 0) return 0;
   const diffMs = expiry.getTime() - now.getTime();
   if (diffMs <= 0) return 0;
   return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
@@ -2254,18 +2315,20 @@ export async function approveProAccessInFirestore(
       const currentExpiryDate = parseExpiryToDate(userData?.expiryDate);
       const isEarlyRenewal =
         userData?.subscriptionTier === 'pro' &&
+        userData?.subscriptionStatus !== 'revoked' &&
         currentExpiryDate !== null &&
         currentExpiryDate.getTime() > approvalNow.getTime();
 
       const baseDate = isEarlyRenewal && currentExpiryDate ? currentExpiryDate : approvalNow;
-      const existingAnchorDay =
-        isEarlyRenewal && typeof userData?.billingAnchorDay === 'number'
-          ? userData.billingAnchorDay
-          : getManilaDay(approvalNow);
+      const existingAnchorDay = resolveRenewalAnchorDay(
+        baseDate,
+        isEarlyRenewal ? userData?.billingAnchorDay : undefined
+      );
 
       const { expiryIso, expiryTimestamp, anchorDay } = calculateNextMonthlyExpiry(
         baseDate,
-        existingAnchorDay
+        existingAnchorDay,
+        1
       );
 
       const startTimestamp =
@@ -2320,6 +2383,107 @@ export async function approveProAccessInFirestore(
     if (error?.message?.includes('already been reviewed')) {
       throw error;
     }
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+/**
+ * Admin Action: Manually grants Pro access to a user from the Users tab.
+ * - Uses the same Asia/Manila calendar month expiry rule (11:59:59 PM PHT on day D).
+ * - If the user is still active Pro, adds `months` to their current `expiryDate`; otherwise starts from now.
+ * - Records `grantedBy`, `grantedAt`, `grantNote` (required), `grantedMonths`, `grantPaid`, and `grantedPaidAmountPhp`.
+ * - Does NOT count toward Verified Revenue unless `markAsPaid === true`.
+ */
+export async function grantProAccessInFirestore(params: {
+  userId: string;
+  adminEmail: string;
+  months?: number;
+  note: string;
+  markAsPaid?: boolean;
+}): Promise<{ expiryIso: string; anchorDay: number; months: number; markAsPaid: boolean }> {
+  const { userId, adminEmail, note } = params;
+  const trimmedNote = (note || '').trim();
+  if (!trimmedNote) {
+    throw new Error('A note or reason is required when manually granting Pro access.');
+  }
+  const validMonths =
+    typeof params.months === 'number' && Number.isFinite(params.months) && params.months >= 1
+      ? Math.min(120, Math.floor(params.months))
+      : 1;
+  const markAsPaid = Boolean(params.markAsPaid);
+  const path = `users/${userId}`;
+
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await transaction.get(userRef);
+      const userData = userSnap.exists() ? userSnap.data() : null;
+
+      const grantNow = new Date();
+      const grantIso = grantNow.toISOString();
+      const grantTimestamp = Timestamp.fromDate(grantNow);
+
+      const currentExpiryDate = parseExpiryToDate(userData?.expiryDate);
+      const isEarlyRenewal =
+        userData?.subscriptionTier === 'pro' &&
+        userData?.subscriptionStatus !== 'revoked' &&
+        currentExpiryDate !== null &&
+        currentExpiryDate.getTime() > grantNow.getTime();
+
+      const baseDate = isEarlyRenewal && currentExpiryDate ? currentExpiryDate : grantNow;
+      const existingAnchorDay = resolveRenewalAnchorDay(
+        baseDate,
+        isEarlyRenewal ? userData?.billingAnchorDay : undefined
+      );
+
+      const { expiryIso, expiryTimestamp, anchorDay } = calculateNextMonthlyExpiry(
+        baseDate,
+        existingAnchorDay,
+        validMonths
+      );
+
+      const startTimestamp =
+        isEarlyRenewal && userData?.subscriptionStartDate instanceof Timestamp
+          ? userData.subscriptionStartDate
+          : grantTimestamp;
+
+      const previousPaidAmount =
+        isEarlyRenewal &&
+        userData?.grantPaid === true &&
+        typeof userData?.grantedPaidAmountPhp === 'number'
+          ? userData.grantedPaidAmountPhp
+          : 0;
+      const addedPaidAmount = markAsPaid ? validMonths * 49 : 0;
+      const nextPaidAmount = previousPaidAmount + addedPaidAmount;
+      const nextGrantPaid = markAsPaid || Boolean(isEarlyRenewal && userData?.grantPaid === true);
+
+      transaction.set(
+        userRef,
+        {
+          id: userId,
+          uid: userId,
+          subscriptionTier: 'pro',
+          subscriptionStatus: 'active',
+          paymentStatus: nextGrantPaid ? 'active_pro' : 'manual_grant',
+          subscriptionStartDate: startTimestamp,
+          expiryDate: expiryTimestamp,
+          billingAnchorDay: anchorDay,
+          grantedBy: adminEmail,
+          grantedAt: grantIso,
+          grantNote: trimmedNote.slice(0, 500),
+          grantedMonths: validMonths,
+          grantPaid: nextGrantPaid,
+          grantedPaidAmountPhp: nextPaidAmount,
+          approvedAt: grantIso,
+          approvedBy: adminEmail,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      return { expiryIso, anchorDay, months: validMonths, markAsPaid };
+    });
+  } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
@@ -2751,7 +2915,8 @@ export async function fetchAdminUsersPage(
     const snap = await getDocs(q);
     const users: any[] = [];
     snap.forEach((docSnap) => {
-      users.push(docSnap.data());
+      const data = docSnap.data();
+      users.push(data && typeof data === 'object' ? { id: docSnap.id, ...data } : { id: docSnap.id });
     });
     const nextCursor = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
     return {
@@ -2888,3 +3053,462 @@ export async function reconcileUserBikeCount(
     needsUpdate,
   };
 }
+
+// ============================================================================
+// FUEL LOG & MONTHLY EXPENSE REPORT (PRO-ONLY, SPARK-PLAN OPTIMIZED)
+// ============================================================================
+
+export const ALLOWED_EXPENSE_TYPES: readonly ExpenseEntryType[] = [
+  'Gas',
+  'Maintenance',
+  'Registration (LTO)',
+  'Insurance',
+  'Parking-Toll',
+  'Iba pa',
+] as const;
+
+/**
+ * Returns today's date in `Asia/Manila` formatted as `YYYY-MM-DD`.
+ */
+export function getCurrentManilaDateStr(now: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = formatter.formatToParts(now);
+  const year = parts.find((p) => p.type === 'year')?.value || '2026';
+  const month = parts.find((p) => p.type === 'month')?.value || '01';
+  const day = parts.find((p) => p.type === 'day')?.value || '01';
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Returns the current calendar month key in `Asia/Manila` formatted as `YYYY-MM`.
+ */
+export function getCurrentManilaMonthKey(now: Date = new Date()): string {
+  return getCurrentManilaDateStr(now).slice(0, 7);
+}
+
+/**
+ * Shifts a `YYYY-MM` month key by `deltaMonths` (e.g. -1 for previous month, +1 for next month).
+ */
+export function shiftManilaMonthKey(monthKey: string, deltaMonths: number): string {
+  const [yStr, mStr] = (monthKey || '').split('-');
+  const year = Number(yStr);
+  const monthIndex = Number(mStr) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) {
+    return getCurrentManilaMonthKey();
+  }
+  const dt = new Date(Date.UTC(year, monthIndex + deltaMonths, 1));
+  const nextYear = dt.getUTCFullYear();
+  const nextMonth = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  return `${nextYear}-${nextMonth}`;
+}
+
+/**
+ * Formats a `YYYY-MM` month key into a friendly Philippine month label (e.g. "November 2026").
+ */
+export function formatManilaMonthLabel(monthKey: string): string {
+  const [yStr, mStr] = (monthKey || '').split('-');
+  const year = Number(yStr);
+  const monthIndex = Number(mStr) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || monthIndex < 0 || monthIndex > 11) {
+    return monthKey;
+  }
+  const dt = new Date(Date.UTC(year, monthIndex, 15, 4, 0, 0));
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    month: 'long',
+    year: 'numeric',
+  }).format(dt);
+}
+
+/**
+ * Formats a `YYYY-MM-DD` date string into Philippine date format (e.g. "Nov 13, 2026").
+ */
+export function formatManilaDateLabel(dateStr: string): string {
+  const match = (dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return dateStr;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const dt = new Date(Date.UTC(year, monthIndex, day, 4, 0, 0));
+  return new Intl.DateTimeFormat('en-PH', {
+    timeZone: 'Asia/Manila',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(dt);
+}
+
+/**
+ * Validates that a Gas entry's odometer reading is strictly higher than the previous Gas entry
+ * for that motorcycle.
+ */
+export function validateGasOdometerForBike(
+  existingEntries: ExpenseEntry[],
+  bikeId: string,
+  newOdometerKm: number,
+  editingEntryId?: string
+): {
+  valid: boolean;
+  error?: string;
+  previousOdometerKm?: number;
+} {
+  if (!Number.isFinite(newOdometerKm) || newOdometerKm <= 0) {
+    return {
+      valid: false,
+      error: 'Maglagay ng tamang odometer reading (kailangang mas mataas sa 0 km).',
+    };
+  }
+
+  const bikeGasEntries = existingEntries.filter(
+    (e) =>
+      e &&
+      e.bikeId === bikeId &&
+      e.type === 'Gas' &&
+      e.id !== editingEntryId &&
+      typeof e.odometerKm === 'number' &&
+      Number.isFinite(e.odometerKm) &&
+      e.odometerKm > 0
+  );
+
+  if (bikeGasEntries.length === 0) {
+    return { valid: true };
+  }
+
+  const maxPrevOdo = Math.max(...bikeGasEntries.map((e) => Number(e.odometerKm)));
+  if (newOdometerKm <= maxPrevOdo) {
+    return {
+      valid: false,
+      previousOdometerKm: maxPrevOdo,
+      error: `Kailangang mas mataas ang odometer (${newOdometerKm.toLocaleString()} km) kaysa sa nakaraang gas entry para sa motor na ito (${maxPrevOdo.toLocaleString()} km).`,
+    };
+  }
+
+  return {
+    valid: true,
+    previousOdometerKm: maxPrevOdo,
+  };
+}
+
+/**
+ * Computes per-bike Fuel Stats:
+ * - Km per liter: distance between two consecutive "Full tank" fill-ups divided by the liters of the later fill-up.
+ * - Gastos kada kilometro: fuel spend divided by kilometers over the same period.
+ * - Skips entries without full-tank or odometer data and explains why in plain Taglish words.
+ * - Shows "Kulang pa ang data" (`hasEnoughData: false`) when there are fewer than 2 full-tank entries.
+ */
+export function calculateBikeFuelStats(
+  entries: ExpenseEntry[],
+  bikeId: string
+): BikeFuelStats {
+  const bikeGasEntries = entries
+    .filter((e) => e && e.bikeId === bikeId && e.type === 'Gas')
+    .sort((a, b) => {
+      const odoA = typeof a.odometerKm === 'number' ? a.odometerKm : 0;
+      const odoB = typeof b.odometerKm === 'number' ? b.odometerKm : 0;
+      if (odoA !== odoB) return odoA - odoB;
+      return a.date.localeCompare(b.date);
+    });
+
+  let skippedNoFullTank = 0;
+  let skippedMissingOdoOrLiters = 0;
+  const validFullTankEntries: ExpenseEntry[] = [];
+
+  for (const entry of bikeGasEntries) {
+    const hasOdo = typeof entry.odometerKm === 'number' && Number.isFinite(entry.odometerKm) && entry.odometerKm > 0;
+    const hasLiters = typeof entry.liters === 'number' && Number.isFinite(entry.liters) && entry.liters > 0;
+    if (!hasOdo || !hasLiters) {
+      skippedMissingOdoOrLiters++;
+      continue;
+    }
+    if (entry.isFullTank !== true) {
+      skippedNoFullTank++;
+      continue;
+    }
+    validFullTankEntries.push(entry);
+  }
+
+  const skippedEntriesCount = skippedNoFullTank + skippedMissingOdoOrLiters;
+  let skippedReasonText: string | null = null;
+  if (skippedEntriesCount > 0) {
+    const reasons: string[] = [];
+    if (skippedNoFullTank > 0) {
+      reasons.push(`${skippedNoFullTank} hindi naka-Full tank`);
+    }
+    if (skippedMissingOdoOrLiters > 0) {
+      reasons.push(`${skippedMissingOdoOrLiters} kulang sa odometer o liters`);
+    }
+    skippedReasonText = `Nilaktawan ang ${skippedEntriesCount} gas entry (${reasons.join(' at ')}) dahil kailangan ng dalawang magkasunod na Full tank na may odometer para sa eksaktong sukat ng km/L.`;
+  }
+
+  if (validFullTankEntries.length < 2) {
+    return {
+      bikeId,
+      hasEnoughData: false,
+      fullTankCount: validFullTankEntries.length,
+      totalGasEntriesCount: bikeGasEntries.length,
+      skippedEntriesCount,
+      skippedReasonText,
+      kmPerLiter: null,
+      costPerKmPhp: null,
+      totalDistanceKm: 0,
+      totalFuelLiters: 0,
+      totalFuelSpendPhp: 0,
+    };
+  }
+
+  let totalDistanceKm = 0;
+  let totalFuelLiters = 0;
+  let totalFuelSpendPhp = 0;
+  let validPairsCount = 0;
+
+  for (let i = 1; i < validFullTankEntries.length; i++) {
+    const prev = validFullTankEntries[i - 1];
+    const curr = validFullTankEntries[i];
+    const dist = Number(curr.odometerKm) - Number(prev.odometerKm);
+    const liters = Number(curr.liters);
+    const spend = Number(curr.amountPhp);
+
+    if (dist > 0 && liters > 0 && spend > 0) {
+      totalDistanceKm += dist;
+      totalFuelLiters += liters;
+      totalFuelSpendPhp += spend;
+      validPairsCount++;
+    }
+  }
+
+  if (validPairsCount === 0 || totalDistanceKm <= 0 || totalFuelLiters <= 0) {
+    return {
+      bikeId,
+      hasEnoughData: false,
+      fullTankCount: validFullTankEntries.length,
+      totalGasEntriesCount: bikeGasEntries.length,
+      skippedEntriesCount,
+      skippedReasonText,
+      kmPerLiter: null,
+      costPerKmPhp: null,
+      totalDistanceKm: 0,
+      totalFuelLiters: 0,
+      totalFuelSpendPhp: 0,
+    };
+  }
+
+  return {
+    bikeId,
+    hasEnoughData: true,
+    fullTankCount: validFullTankEntries.length,
+    totalGasEntriesCount: bikeGasEntries.length,
+    skippedEntriesCount,
+    skippedReasonText,
+    kmPerLiter: totalDistanceKm / totalFuelLiters,
+    costPerKmPhp: totalFuelSpendPhp / totalDistanceKm,
+    totalDistanceKm,
+    totalFuelLiters,
+    totalFuelSpendPhp,
+  };
+}
+
+/**
+ * Loads one month of expense entries for a user (paginated, default 50 per page)
+ * to keep Firestore reads low on the free Spark plan.
+ */
+export async function fetchMonthlyExpensesPage(params: {
+  userId: string;
+  monthKey: string;
+  bikeId?: string;
+  pageSize?: number;
+  lastDoc?: QueryDocumentSnapshot<DocumentData> | null;
+}): Promise<{
+  entries: ExpenseEntry[];
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
+}> {
+  const { userId, monthKey, bikeId, pageSize = 50, lastDoc } = params;
+  const path = `/expenses (userId=${userId}, monthKey=${monthKey})`;
+  try {
+    const colRef = collection(db, 'expenses');
+    const constraints: any[] = [
+      where('userId', '==', userId),
+      where('monthKey', '==', monthKey),
+    ];
+    if (bikeId && bikeId !== 'all') {
+      constraints.push(where('bikeId', '==', bikeId));
+    }
+    if (lastDoc && typeof startAfter === 'function') {
+      constraints.push(startAfter(lastDoc));
+    }
+    if (typeof limit === 'function') {
+      constraints.push(limit(pageSize));
+    }
+
+    const q = query(colRef, ...constraints);
+    const snap = await getDocs(q);
+    const entries: ExpenseEntry[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data() as ExpenseEntry;
+      entries.push({ ...data, id: docSnap.id });
+    });
+
+    entries.sort((a, b) => {
+      const dateCmp = (b.date || '').localeCompare(a.date || '');
+      if (dateCmp !== 0) return dateCmp;
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    });
+
+    const nextCursor = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
+    return {
+      entries,
+      lastDoc: nextCursor,
+      hasMore: snap.docs.length === pageSize,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+/**
+ * Loads up to `maxCount` (default 50) Gas entries for a specific bike owned by `userId`
+ * so fuel efficiency stats and monotonic odometer checks work across month boundaries
+ * while keeping Spark reads bounded.
+ */
+export async function fetchBikeGasEntriesOnce(
+  userId: string,
+  bikeId: string,
+  maxCount = 50
+): Promise<ExpenseEntry[]> {
+  if (!userId || !bikeId) return [];
+  const path = `/expenses (userId=${userId}, bikeId=${bikeId}, type=Gas)`;
+  try {
+    const colRef = collection(db, 'expenses');
+    const constraints: any[] = [
+      where('userId', '==', userId),
+      where('bikeId', '==', bikeId),
+      where('type', '==', 'Gas'),
+    ];
+    if (typeof limit === 'function') {
+      constraints.push(limit(maxCount));
+    }
+    const q = query(colRef, ...constraints);
+    const snap = await getDocs(q);
+    const entries: ExpenseEntry[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data() as ExpenseEntry;
+      entries.push({ ...data, id: docSnap.id });
+    });
+    entries.sort((a, b) => {
+      const odoA = typeof a.odometerKm === 'number' ? a.odometerKm : 0;
+      const odoB = typeof b.odometerKm === 'number' ? b.odometerKm : 0;
+      if (odoA !== odoB) return odoA - odoB;
+      return (a.date || '').localeCompare(b.date || '');
+    });
+    return entries;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+/**
+ * Creates or updates an ExpenseEntry in `/expenses/{expenseId}`.
+ * Enforces client-side validation matching `firestore.rules` before writing.
+ */
+export async function saveExpenseEntryToFirestore(
+  input: {
+    id?: string;
+    userId: string;
+    bikeId: string;
+    type: ExpenseEntryType;
+    date: string;
+    amountPhp: number;
+    liters?: number | null;
+    odometerKm?: number | null;
+    isFullTank?: boolean | null;
+    note?: string;
+    createdAt?: string;
+  }
+): Promise<ExpenseEntry> {
+  if (!input.userId) {
+    throw new Error('Kailangang naka-sign in para mag-save ng gastos.');
+  }
+  if (!input.bikeId) {
+    throw new Error('Pumili muna ng motor.');
+  }
+  if (!ALLOWED_EXPENSE_TYPES.includes(input.type)) {
+    throw new Error('Hindi valid ang uri ng gastos.');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date || '')) {
+    throw new Error('Maglagay ng tamang petsa (YYYY-MM-DD).');
+  }
+  const amountPhp = Number(input.amountPhp);
+  if (!Number.isFinite(amountPhp) || amountPhp <= 0) {
+    throw new Error('Ang halaga (₱) ay kailangang mas mataas sa 0.');
+  }
+
+  const trimmedNote = (input.note || '').trim();
+  if (trimmedNote.length > 100) {
+    throw new Error('Ang note ay hanggang 100 characters lang.');
+  }
+
+  let liters: number | null = null;
+  let odometerKm: number | null = null;
+  let isFullTank: boolean | null = null;
+
+  if (input.type === 'Gas') {
+    const parsedLiters = Number(input.liters);
+    const parsedOdo = Number(input.odometerKm);
+    if (!Number.isFinite(parsedLiters) || parsedLiters <= 0) {
+      throw new Error('Ilagay kung ilang litro ng gas ang naikarga (mas mataas sa 0).');
+    }
+    if (!Number.isFinite(parsedOdo) || parsedOdo <= 0) {
+      throw new Error('Ilagay ang kasalukuyang odometer km para sa Gas entry.');
+    }
+    liters = Number(parsedLiters.toFixed(3));
+    odometerKm = Math.round(parsedOdo);
+    isFullTank = input.isFullTank !== false;
+  }
+
+  const expenseId =
+    input.id || `exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
+  const monthKey = input.date.slice(0, 7);
+
+  const payload: ExpenseEntry = stripUndefined({
+    id: expenseId,
+    userId: input.userId,
+    bikeId: input.bikeId,
+    type: input.type,
+    date: input.date,
+    monthKey,
+    amountPhp: Number(amountPhp.toFixed(2)),
+    liters: input.type === 'Gas' ? liters : null,
+    odometerKm: input.type === 'Gas' ? odometerKm : null,
+    isFullTank: input.type === 'Gas' ? isFullTank : null,
+    ...(trimmedNote ? { note: trimmedNote } : {}),
+    createdAt: input.createdAt || nowIso,
+    updatedAt: nowIso,
+  }) as ExpenseEntry;
+
+  const path = `expenses/${expenseId}`;
+  try {
+    await setDoc(doc(db, 'expenses', expenseId), payload);
+    return payload;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Deletes an ExpenseEntry from `/expenses/{expenseId}`.
+ */
+export async function deleteExpenseEntryFromFirestore(expenseId: string): Promise<void> {
+  const path = `expenses/${expenseId}`;
+  try {
+    await deleteDoc(doc(db, 'expenses', expenseId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

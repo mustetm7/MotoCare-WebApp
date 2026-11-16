@@ -3,8 +3,22 @@ import { MaintenanceReminder, Motorcycle, ServiceRecord, UserSubscription } from
 import {
   exportCasaServiceCsv,
   generatePrintableMaintenancePdfReport,
+  parseAndValidateMaintenanceCsv,
+  MaintenanceCsvImportValidationResult,
 } from '../utils/storage';
-import { Plus, Download, FileText, Search, Wrench, Trash2, ArrowLeft, X } from 'lucide-react';
+import {
+  Plus,
+  Download,
+  Upload,
+  FileText,
+  Search,
+  Wrench,
+  Trash2,
+  ArrowLeft,
+  X,
+  CheckCircle2,
+  AlertCircle,
+} from 'lucide-react';
 import { sounds } from '../utils/audio';
 
 interface ServiceLogbookViewProps {
@@ -14,6 +28,7 @@ interface ServiceLogbookViewProps {
   subscription: UserSubscription;
   hasProAccess?: boolean;
   onOpenAddService: () => void;
+  onImportRecords?: (records: ServiceRecord[]) => void | Promise<void>;
   onOpenCasaBooklet: () => void;
   onDeleteRecord: (recordId: string) => void;
   onOpenPaywall: () => void;
@@ -27,6 +42,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
   subscription,
   hasProAccess,
   onOpenAddService,
+  onImportRecords,
   onDeleteRecord,
   onOpenPaywall,
   onBack,
@@ -44,6 +60,14 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
     [records, bike?.id]
   );
   const [showAllBikes, setShowAllBikes] = React.useState(false);
+
+  // CSV Import State
+  const [isCsvImportOpen, setIsCsvImportOpen] = React.useState(false);
+  const [csvRawText, setCsvRawText] = React.useState('');
+  const [csvValidation, setCsvValidation] =
+    React.useState<MaintenanceCsvImportValidationResult | null>(null);
+  const [csvImportSuccessCount, setCsvImportSuccessCount] = React.useState<number | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const bikeRecords = records
     .filter((r) => (!bike?.id || showAllBikes ? true : r.bikeId === bike.id))
@@ -80,6 +104,50 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
 
   const handleExportPdf = () => {
     generatePrintableMaintenancePdfReport(bike, bikeRecords, bikeReminders);
+  };
+
+  const handleValidateCsvText = (text: string) => {
+    setCsvRawText(text);
+    setCsvImportSuccessCount(null);
+    if (!text.trim()) {
+      setCsvValidation(null);
+      return;
+    }
+    const result = parseAndValidateMaintenanceCsv(text, bike, bike.userId);
+    setCsvValidation(result);
+  };
+
+  const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = typeof reader.result === 'string' ? reader.result : '';
+      handleValidateCsvText(content);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleLoadSampleCsv = () => {
+    const sample = [
+      'Date,Kilometer,Service Description,Total Cost (PHP),Shop Name,Notes',
+      `2025-09-15,${Math.max(1000, (bike?.odometer || 3000) - 1500)},Engine Oil & Gear Oil Change,650,Yamaha 3S Shop,Yamalube Blue Core`,
+      `2025-11-02,${Math.max(2000, (bike?.odometer || 3000) - 500)},CVT Cleaning & Air Filter Check,450,MotoCare Garage,Smooth acceleration`,
+    ].join('\n');
+    handleValidateCsvText(sample);
+  };
+
+  const handleConfirmCsvImport = async () => {
+    if (!csvValidation || csvValidation.validRecords.length === 0 || !onImportRecords) return;
+    const count = csvValidation.validRecords.length;
+    await onImportRecords(csvValidation.validRecords);
+    sounds.playSuccess();
+    setCsvImportSuccessCount(count);
+    setCsvRawText('');
+    setCsvValidation(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   return (
@@ -119,7 +187,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
       </div>
 
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
             Service History
@@ -135,7 +203,25 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {bike?.id && onImportRecords && (
+            <button
+              type="button"
+              data-testid="import-csv-btn"
+              onClick={() => {
+                sounds.playClick();
+                setIsCsvImportOpen((v) => !v);
+                setCsvImportSuccessCount(null);
+              }}
+              className="px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] bg-white border border-slate-200 hover:border-[#FF6B00] rounded-xl transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              title="Import Legacy Records from CSV"
+              aria-label="Import maintenance history from CSV"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#FF6B00]" />
+              <span>Import CSV</span>
+            </button>
+          )}
+
           <button
             type="button"
             data-testid="export-pdf-btn"
@@ -174,6 +260,141 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* CSV Import Panel */}
+      {isCsvImportOpen && (
+        <div
+          data-testid="csv-import-panel"
+          className="p-4 sm:p-5 rounded-3xl bg-white border-2 border-orange-200/80 shadow-sm space-y-3.5"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-1.5">
+                <Upload className="w-4 h-4 text-[#FF6B00]" />
+                <span>Import Legacy Maintenance History (CSV)</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Upload a <code className="font-mono text-slate-700">.csv</code> file or paste rows with required columns:{' '}
+                <strong className="text-slate-700">Date</strong>,{' '}
+                <strong className="text-slate-700">Kilometer</strong> (or Odometer), and{' '}
+                <strong className="text-slate-700">Service Description</strong>.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCsvImportOpen(false)}
+              className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+              aria-label="Close CSV import panel"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              data-testid="csv-file-input"
+              onChange={handleCsvFileChange}
+              className="text-xs text-slate-600 file:mr-2.5 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-orange-50 file:text-[#FF6B00] hover:file:bg-orange-100 cursor-pointer"
+            />
+            <button
+              type="button"
+              data-testid="csv-load-sample-btn"
+              onClick={handleLoadSampleCsv}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-[11px] font-bold text-slate-700 transition-colors cursor-pointer"
+            >
+              Load Sample Template
+            </button>
+          </div>
+
+          <textarea
+            rows={4}
+            data-testid="csv-textarea-input"
+            value={csvRawText}
+            onChange={(e) => handleValidateCsvText(e.target.value)}
+            placeholder={'Date,Kilometer,Service Description,Total Cost (PHP)\n2025-08-12,4500,Engine Oil Change,450'}
+            className="w-full rounded-2xl bg-slate-50 border border-slate-200 p-3 text-xs font-mono text-slate-800 focus:outline-none focus:border-[#FF6B00]"
+          />
+
+          {csvImportSuccessCount !== null && (
+            <div
+              role="status"
+              data-testid="csv-import-success-banner"
+              className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2"
+            >
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                Successfully imported {csvImportSuccessCount} legacy maintenance record
+                {csvImportSuccessCount === 1 ? '' : 's'}!
+              </span>
+            </div>
+          )}
+
+          {csvValidation && (
+            <div className="space-y-2.5">
+              {csvValidation.errors.length > 0 && (
+                <div
+                  role="alert"
+                  data-testid="csv-validation-errors"
+                  className="p-3 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs space-y-1"
+                >
+                  <div className="font-extrabold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>Validation Issues ({csvValidation.errors.length})</span>
+                  </div>
+                  <ul className="list-disc pl-5 space-y-0.5 text-[11px]">
+                    {csvValidation.errors.map((err, i) => (
+                      <li key={i}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {csvValidation.validRecords.length > 0 && (
+                <div
+                  data-testid="csv-valid-preview"
+                  className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2"
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-extrabold text-emerald-700">
+                      Ready to Import: {csvValidation.validRecords.length} valid record
+                      {csvValidation.validRecords.length === 1 ? '' : 's'}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid="confirm-csv-import-btn"
+                      onClick={() => void handleConfirmCsvImport()}
+                      className="px-4 py-1.5 rounded-xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-extrabold text-xs shadow-xs cursor-pointer"
+                    >
+                      Import {csvValidation.validRecords.length} Record
+                      {csvValidation.validRecords.length === 1 ? '' : 's'}
+                    </button>
+                  </div>
+
+                  <div className="max-h-36 overflow-y-auto space-y-1 text-[11px] font-mono text-slate-600">
+                    {csvValidation.validRecords.slice(0, 10).map((rec) => (
+                      <div
+                        key={rec.id}
+                        className="flex items-center justify-between py-1 px-2 rounded-lg bg-white border border-slate-100"
+                      >
+                        <span className="truncate">
+                          {rec.date} • {rec.odometer.toLocaleString()} km •{' '}
+                          <strong className="font-sans text-slate-800">{rec.title}</strong>
+                        </span>
+                        <span className="text-slate-900 font-bold shrink-0 ml-2">
+                          ₱{rec.totalCostPhp.toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">

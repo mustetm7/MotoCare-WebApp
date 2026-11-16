@@ -65,6 +65,7 @@ import { Navbar } from './components/Navbar';
 import { GarageHeader } from './components/GarageHeader';
 import { MaintenanceCard } from './components/MaintenanceCard';
 import { ServiceLogbookView } from './components/ServiceLogbookView';
+import { FuelAndExpensesView } from './components/FuelAndExpensesView';
 import { LtoView } from './components/LtoView';
 import { PreRideChecklistView } from './components/PreRideChecklistView';
 import { GarageModal } from './components/GarageModal';
@@ -919,6 +920,70 @@ export function App() {
     }
   };
 
+  const handleImportServiceRecords = (importedRecords: ServiceRecord[]) => {
+    if (!importedRecords || importedRecords.length === 0) return;
+    const scopedRecords = importedRecords.map((rec) =>
+      user?.uid ? { ...rec, userId: user.uid } : rec
+    );
+
+    setServiceRecords((prev) => {
+      const next = [...scopedRecords, ...prev];
+      if (user?.uid) {
+        saveUserScopedServiceRecords(user.uid, next);
+      } else {
+        saveServiceRecords(next);
+      }
+      return next;
+    });
+
+    const maxImportedOdo = Math.max(...scopedRecords.map((r) => r.odometer || 0));
+    if (activeBike && maxImportedOdo > activeBike.odometer) {
+      handleUpdateOdometer(maxImportedOdo);
+    }
+
+    if (user?.uid) {
+      scopedRecords.forEach((rec) => {
+        executeDirectOnlineWrite({
+          userId: user.uid,
+          entity: 'serviceRecord',
+          action: 'upsert',
+          targetId: rec.id,
+          payload: rec as unknown as Record<string, unknown>,
+          preEditRecord: null,
+        });
+      });
+    }
+  };
+
+  const handleUpdateSpecificBikeOdometer = useCallback(
+    (targetBikeId: string, newOdometerKm: number) => {
+      if (activeBike && activeBike.id === targetBikeId) {
+        handleUpdateOdometer(newOdometerKm);
+        return;
+      }
+      const targetBike = motorcycles.find((b) => b.id === targetBikeId);
+      if (!targetBike || newOdometerKm <= targetBike.odometer) return;
+      const updatedBike: Motorcycle = {
+        ...targetBike,
+        odometer: newOdometerKm,
+        updatedAt: new Date().toISOString(),
+        timestampSource: 'client_pending',
+      };
+      setMotorcycles((prev) => prev.map((b) => (b.id === targetBikeId ? updatedBike : b)));
+      if (user?.uid) {
+        executeDirectOnlineWrite({
+          userId: user.uid,
+          entity: 'motorcycle',
+          action: 'update_fields',
+          targetId: targetBikeId,
+          payload: { odometer: newOdometerKm },
+          preEditRecord: targetBike,
+        });
+      }
+    },
+    [activeBike, motorcycles, handleUpdateOdometer, user?.uid]
+  );
+
   // Handlers: Maintenance Reminders
   const handleSaveReminder = (reminderData: MaintenanceReminder) => {
     const existingRem = reminders.find((r) => r.id === reminderData.id) || null;
@@ -1260,7 +1325,7 @@ export function App() {
               isPro={isPro}
             />
 
-            {activeTab === 'reminders' && (
+            {(activeTab === 'reminders' || activeTab === 'garage') && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -1328,7 +1393,7 @@ export function App() {
               </div>
             )}
 
-            {activeTab === 'history' && (
+            {(activeTab === 'history' || activeTab === 'logbook') && (
               <ServiceLogbookView
                 records={activeBikeRecords}
                 reminders={activeBikeReminders}
@@ -1339,9 +1404,23 @@ export function App() {
                   setPrefillReminder(null);
                   setServiceModalOpen(true);
                 }}
+                onImportRecords={handleImportServiceRecords}
                 onOpenCasaBooklet={() => setCasaBookletOpen(true)}
                 onDeleteRecord={handleDeleteServiceRecord}
                 onOpenPaywall={() => setPaywallModalOpen(true)}
+                onBack={() => setActiveTab('reminders')}
+              />
+            )}
+
+            {(activeTab === 'expenses' || activeTab === 'analytics') && (
+              <FuelAndExpensesView
+                userId={user?.uid}
+                motorcycles={motorcycles}
+                activeBike={activeBike}
+                subscription={subscription}
+                hasProAccess={isPro}
+                onOpenPaywall={() => setPaywallModalOpen(true)}
+                onUpdateBikeOdometer={handleUpdateSpecificBikeOdometer}
                 onBack={() => setActiveTab('reminders')}
               />
             )}

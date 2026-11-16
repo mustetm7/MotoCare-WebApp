@@ -1,6 +1,6 @@
 import React from 'react';
 import { Motorcycle, UserSubscription } from '../types';
-import { X, Headphones, Bike, Pause, Play, ArrowRight, MapPin, Navigation } from 'lucide-react';
+import { X, Bike, Pause, Play, ArrowRight } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import L from 'leaflet';
 
@@ -14,7 +14,59 @@ interface GpsRideTrackerSheetProps {
 }
 
 const DEFAULT_MANILA_COORDS: [number, number] = [14.5995, 120.9842];
-export const AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS = 300; // 5 minutes
+export const AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS = 60; // 1 minute (60 seconds)
+export const MIN_MOVEMENT_DISTANCE_KM = 0.005; // 5 meters minimum displacement
+export const JITTER_DISPLACEMENT_THRESHOLD_KM = 0.015; // 15 meters threshold when speed is low/unavailable
+
+export function calculateHaversineDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371; // km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export function isGenuineMotorcycleMovement(params: {
+  distanceKm: number;
+  speedKmh: number;
+  isAutoPaused: boolean;
+  accuracyMeters?: number | null;
+}): boolean {
+  const { distanceKm, speedKmh, isAutoPaused, accuracyMeters } = params;
+
+  // Reject fixes with severe GPS signal degradation (>100m accuracy radius)
+  if (typeof accuracyMeters === 'number' && accuracyMeters > 100) {
+    return false;
+  }
+
+  // Sub-5m fluctuations are always stationary GPS jitter
+  if (distanceKm <= MIN_MOVEMENT_DISTANCE_KM) {
+    return false;
+  }
+
+  // While auto-paused, require clear physical movement (>=15m displacement or >8m with >=5 km/h speed)
+  // so stationary GPS drift does not falsely resume tracking
+  if (isAutoPaused) {
+    return (
+      distanceKm >= JITTER_DISPLACEMENT_THRESHOLD_KM ||
+      (distanceKm > 0.008 && speedKmh >= 5)
+    );
+  }
+
+  // During active tracking, require either >=15m displacement or >5m displacement with >=3 km/h speed
+  return distanceKm >= JITTER_DISPLACEMENT_THRESHOLD_KM || speedKmh >= 3;
+}
 
 export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
   bike,
@@ -34,6 +86,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
   const [isPaused, setIsPaused] = React.useState(false);
   const [autoPauseEnabled, setAutoPauseEnabled] = React.useState(true);
   const [isAutoPaused, setIsAutoPaused] = React.useState(false);
+  const [isResuming, setIsResuming] = React.useState(false);
   const [stationarySeconds, setStationarySeconds] = React.useState(0);
   const [elapsedSeconds, setElapsedSeconds] = React.useState(8);
   const [distanceKm, setDistanceKm] = React.useState(0.0);
@@ -44,9 +97,44 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
     DEFAULT_MANILA_COORDS,
   ]);
 
+  // Mutable refs to prevent duplicate intervals/listeners across state updates
   const stationarySecondsRef = React.useRef(0);
   const isAutoPausedRef = React.useRef(false);
+  const isPausedRef = React.useRef(false);
+  const autoPauseEnabledRef = React.useRef(true);
+  const isSimulatingRef = React.useRef(false);
+  const currentSpeedRef = React.useRef(0);
   const lastMoveTimestampRef = React.useRef<number | null>(null);
+  const lastFixTimestampRef = React.useRef<number | null>(null);
+  const lastCoordsRef = React.useRef<{ lat: number; lng: number } | null>(null);
+  const reanchorAfterManualPauseRef = React.useRef(false);
+  const resumingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watchIdRef = React.useRef<number | null>(null);
+  const timerIdRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  isPausedRef.current = isPaused;
+  autoPauseEnabledRef.current = autoPauseEnabled;
+  isSimulatingRef.current = isSimulating;
+
+  const triggerResumingIndicator = React.useCallback(() => {
+    setIsResuming(true);
+    if (resumingTimeoutRef.current !== null) {
+      clearTimeout(resumingTimeoutRef.current);
+    }
+    resumingTimeoutRef.current = setTimeout(() => {
+      setIsResuming(false);
+      resumingTimeoutRef.current = null;
+    }, 1500);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (resumingTimeoutRef.current !== null) {
+        clearTimeout(resumingTimeoutRef.current);
+        resumingTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   // Leaflet Mini-Map refs
   const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -133,29 +221,30 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
     }
   }, [routeCoords]);
 
-  const handleRecenterMap = () => {
-    if (!leafletMapRef.current || routeCoords.length === 0) return;
-    const latestCoord = routeCoords[routeCoords.length - 1];
-    try {
-      leafletMapRef.current.setView(latestCoord, 15, { animate: false });
-    } catch {
-      // Safe fallback
-    }
-  };
-
-  // Active ride timer & stationary >5-minute auto-pause detector
+  // Active ride timer & stationary >=60-second (1-minute) auto-pause detector
   React.useEffect(() => {
+    if (timerIdRef.current !== null) {
+      clearInterval(timerIdRef.current);
+      timerIdRef.current = null;
+    }
+
     if (!isPro || isPaused) return;
 
     const timer = setInterval(() => {
-      if (isSimulating) {
+      if (isSimulatingRef.current) {
+        const wasAutoPaused = isAutoPausedRef.current;
         stationarySecondsRef.current = 0;
         setStationarySeconds(0);
-        setIsAutoPaused(false);
+        if (wasAutoPaused) {
+          isAutoPausedRef.current = false;
+          setIsAutoPaused(false);
+          triggerResumingIndicator();
+        }
         setElapsedSeconds((prev) => prev + 1);
 
         // Generate realistic scooter ride simulation (30 - 55 km/h)
         const simSpeed = Math.floor(38 + Math.sin(Date.now() / 2000) * 12);
+        currentSpeedRef.current = simSpeed;
         setCurrentSpeed(simSpeed);
         setTopSpeed((prev) => Math.max(prev, simSpeed));
         setDistanceKm((prev) => +(prev + simSpeed / 3600).toFixed(4));
@@ -168,42 +257,64 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         return;
       }
 
-      if (currentSpeed <= 1) {
+      if (currentSpeedRef.current <= 1) {
         const nextStationary = stationarySecondsRef.current + 1;
         stationarySecondsRef.current = nextStationary;
         setStationarySeconds(nextStationary);
 
-        if (autoPauseEnabled && nextStationary >= AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS) {
-          isAutoPausedRef.current = true;
-          setIsAutoPaused(true);
+        if (
+          autoPauseEnabledRef.current &&
+          nextStationary >= AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS
+        ) {
+          if (!isAutoPausedRef.current) {
+            isAutoPausedRef.current = true;
+            setIsAutoPaused(true);
+            setIsResuming(false);
+          }
           return;
         }
       } else {
+        const wasAutoPaused = isAutoPausedRef.current;
         stationarySecondsRef.current = 0;
         setStationarySeconds(0);
-        isAutoPausedRef.current = false;
-        setIsAutoPaused(false);
+        if (wasAutoPaused) {
+          isAutoPausedRef.current = false;
+          setIsAutoPaused(false);
+          triggerResumingIndicator();
+        }
       }
 
-      if (!isAutoPausedRef.current && !isAutoPaused) {
+      if (!isAutoPausedRef.current) {
         setElapsedSeconds((prev) => prev + 1);
       }
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, [isPro, isPaused, isSimulating, currentSpeed, autoPauseEnabled, isAutoPaused]);
+    timerIdRef.current = timer;
+
+    return () => {
+      if (timerIdRef.current !== null) {
+        clearInterval(timerIdRef.current);
+        timerIdRef.current = null;
+      }
+    };
+  }, [isPro, isPaused, triggerResumingIndicator]);
 
   // Real GPS Geolocation Watcher if not simulating
   React.useEffect(() => {
-    if (!isPro || isSimulating || isPaused || !navigator.geolocation) return;
+    if (watchIdRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
 
-    let lastCoords: { lat: number; lng: number } | null = null;
+    if (!isPro || isSimulating || isPaused || !navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
-        setCurrentSpeed(speedKmh);
-        setTopSpeed((prev) => Math.max(prev, speedKmh));
+        const rawSpeedMps = pos.coords.speed;
+        const reportedSpeedKmh =
+          typeof rawSpeedMps === 'number' && !Number.isNaN(rawSpeedMps) && rawSpeedMps > 0
+            ? Math.round(rawSpeedMps * 3.6)
+            : 0;
 
         const fixTimestamp = typeof pos.timestamp === 'number' ? pos.timestamp : Date.now();
         const nextCoord: [number, number] = [
@@ -211,62 +322,137 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
           +pos.coords.longitude.toFixed(6),
         ];
 
-        if (!lastCoords) {
-          lastCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          lastMoveTimestampRef.current = fixTimestamp;
-          setRouteCoords([nextCoord]);
+        // First GPS fix of the session or first fix after manual pause/resume
+        if (!lastCoordsRef.current || reanchorAfterManualPauseRef.current) {
+          reanchorAfterManualPauseRef.current = false;
+          lastCoordsRef.current = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          };
+          lastFixTimestampRef.current = fixTimestamp;
+          if (lastMoveTimestampRef.current === null || reportedSpeedKmh >= 3) {
+            lastMoveTimestampRef.current = fixTimestamp;
+          }
+          currentSpeedRef.current = reportedSpeedKmh;
+          setCurrentSpeed(reportedSpeedKmh);
+          if (reportedSpeedKmh > 0) {
+            setTopSpeed((prev) => Math.max(prev, reportedSpeedKmh));
+          }
+          setRouteCoords((prev) =>
+            prev.length === 1 &&
+            prev[0][0] === DEFAULT_MANILA_COORDS[0] &&
+            prev[0][1] === DEFAULT_MANILA_COORDS[1]
+              ? [nextCoord]
+              : [...prev, nextCoord]
+          );
           return;
         }
 
-        // Haversine formula
-        const R = 6371; // km
-        const dLat = ((pos.coords.latitude - lastCoords.lat) * Math.PI) / 180;
-        const dLon = ((pos.coords.longitude - lastCoords.lng) * Math.PI) / 180;
-        const a =
-          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-          Math.cos((lastCoords.lat * Math.PI) / 180) *
-            Math.cos((pos.coords.latitude * Math.PI) / 180) *
-            Math.sin(dLon / 2) *
-            Math.sin(dLon / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        const d = R * c;
+        // Ignore exact duplicate timestamp fixes to prevent duplicate mileage
+        if (
+          lastFixTimestampRef.current !== null &&
+          fixTimestamp === lastFixTimestampRef.current &&
+          pos.coords.latitude === lastCoordsRef.current.lat &&
+          pos.coords.longitude === lastCoordsRef.current.lng
+        ) {
+          return;
+        }
 
-        if (d > 0.005 && (!isAutoPausedRef.current || speedKmh > 1 || d > 0.025)) {
-          // Significant movement detected (> 5m): clear stationary counter & auto-resume if auto-paused
+        const d = calculateHaversineDistanceKm(
+          lastCoordsRef.current.lat,
+          lastCoordsRef.current.lng,
+          pos.coords.latitude,
+          pos.coords.longitude
+        );
+
+        const timeDeltaSec =
+          lastFixTimestampRef.current !== null && fixTimestamp > lastFixTimestampRef.current
+            ? (fixTimestamp - lastFixTimestampRef.current) / 1000
+            : 1;
+        lastFixTimestampRef.current = fixTimestamp;
+
+        // Guard against unrealistic teleportation spikes after temporary GPS signal loss
+        if (timeDeltaSec > 120 && d / (timeDeltaSec / 3600) > 180) {
+          lastCoordsRef.current = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          };
+          return;
+        }
+
+        const genuineMove = isGenuineMotorcycleMovement({
+          distanceKm: d,
+          speedKmh: reportedSpeedKmh,
+          isAutoPaused: isAutoPausedRef.current,
+          accuracyMeters: pos.coords.accuracy,
+        });
+
+        if (genuineMove) {
+          const wasAutoPaused = isAutoPausedRef.current;
           stationarySecondsRef.current = 0;
           setStationarySeconds(0);
           isAutoPausedRef.current = false;
           setIsAutoPaused(false);
+          if (wasAutoPaused) {
+            triggerResumingIndicator();
+          }
           lastMoveTimestampRef.current = fixTimestamp;
 
+          const effectiveSpeedKmh =
+            reportedSpeedKmh > 0
+              ? reportedSpeedKmh
+              : Math.min(80, Math.max(12, Math.round(d / (Math.max(1, timeDeltaSec) / 3600))));
+
+          currentSpeedRef.current = effectiveSpeedKmh;
+          setCurrentSpeed(effectiveSpeedKmh);
+          setTopSpeed((prev) => Math.max(prev, effectiveSpeedKmh));
+
           setDistanceKm((prev) => +(prev + d).toFixed(4));
-          lastCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          lastCoordsRef.current = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          };
           setRouteCoords((prev) => [...prev, nextCoord]);
-        } else if (
-          lastMoveTimestampRef.current !== null &&
-          fixTimestamp - lastMoveTimestampRef.current >=
-            AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS * 1000
-        ) {
-          // No significant movement for 5 consecutive minutes based on GPS fix timestamps: pause session
-          const elapsedStationarySec = Math.floor(
-            (fixTimestamp - lastMoveTimestampRef.current) / 1000
-          );
-          stationarySecondsRef.current = elapsedStationarySec;
-          setStationarySeconds(elapsedStationarySec);
-          if (autoPauseEnabled) {
-            isAutoPausedRef.current = true;
-            setIsAutoPaused(true);
+        } else {
+          // Motorcycle is stationary or experiencing minor GPS drift/jitter:
+          // Do not accumulate distance and do not update anchor coordinates
+          currentSpeedRef.current = 0;
+          setCurrentSpeed(0);
+
+          if (lastMoveTimestampRef.current !== null && fixTimestamp >= lastMoveTimestampRef.current) {
+            const elapsedStationarySec = Math.floor(
+              (fixTimestamp - lastMoveTimestampRef.current) / 1000
+            );
+            if (elapsedStationarySec > stationarySecondsRef.current) {
+              stationarySecondsRef.current = elapsedStationarySec;
+              setStationarySeconds(elapsedStationarySec);
+            }
+            if (
+              autoPauseEnabledRef.current &&
+              stationarySecondsRef.current >= AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS
+            ) {
+              isAutoPausedRef.current = true;
+              setIsAutoPaused(true);
+              setIsResuming(false);
+            }
           }
         }
       },
       () => {
-        // fallback
+        // Temporary GPS signal loss fallback: preserve existing session & accumulated mileage
       },
       { enableHighAccuracy: true, maximumAge: 1000 }
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [isPro, isSimulating, isPaused, autoPauseEnabled]);
+    watchIdRef.current = watchId;
+
+    return () => {
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [isPro, isSimulating, isPaused, triggerResumingIndicator]);
 
   // Format mm:ss
   const formatTime = (secs: number) => {
@@ -277,8 +463,15 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
 
   const roundedAddedKm = Math.max(1, Math.round(distanceKm || 1));
   const previewNewOdo = bike.odometer + roundedAddedKm;
-  const latestPosition = routeCoords[routeCoords.length - 1] || DEFAULT_MANILA_COORDS;
   const effectivelyPaused = isPaused || isAutoPaused;
+
+  const trackingStatusLabel = isPaused
+    ? 'Paused'
+    : isAutoPaused
+    ? 'Paused - Motorcycle Stationary'
+    : isResuming
+    ? 'Resuming Tracking'
+    : 'Tracking';
 
   const handleFinish = () => {
     if (!isPro) {
@@ -325,30 +518,42 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
 
   return (
     <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 p-5 space-y-4 animate-in fade-in duration-200 max-h-[92vh] overflow-y-auto">
-      {/* Top Header matching screenshot 7 */}
+      {/* Top Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {/* Live Tracking or Auto-Paused pill */}
           {isAutoPaused ? (
             <div
               data-testid="gps-auto-paused-badge"
               className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold"
             >
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-              <span className="tracking-wide">AUTO-PAUSED (STATIONARY &gt;5M)</span>
+              <span className="tracking-wide">{trackingStatusLabel}</span>
+            </div>
+          ) : isPaused ? (
+            <div
+              data-testid="gps-manual-paused-badge"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 text-xs font-bold"
+            >
+              <span className="w-2 h-2 rounded-full bg-slate-500" />
+              <span className="tracking-wide">{trackingStatusLabel}</span>
+            </div>
+          ) : isResuming ? (
+            <div
+              data-testid="gps-resuming-badge"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-300 text-cyan-800 text-xs font-bold"
+            >
+              <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
+              <span className="tracking-wide">{trackingStatusLabel}</span>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#E8FAF0] border border-emerald-300 text-emerald-700 text-xs font-bold">
+            <div
+              data-testid="gps-active-tracking-badge"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#E8FAF0] border border-emerald-300 text-emerald-700 text-xs font-bold"
+            >
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="tracking-wide">LIVE TRACKING</span>
+              <span className="tracking-wide">{trackingStatusLabel}</span>
             </div>
           )}
-
-          {/* BT Auto-Sync */}
-          <div className="flex items-center gap-1 text-xs font-bold text-[#00ACC1]">
-            <Headphones className="w-3.5 h-3.5" />
-            <span>BT Auto-Sync</span>
-          </div>
         </div>
 
         {onClose && (
@@ -375,10 +580,10 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
           <div className="space-y-0.5">
             <div className="font-extrabold text-amber-950 flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
-              <span>Ride Session Auto-Paused (5+ Mins No Movement)</span>
+              <span>Paused - Motorcycle Stationary</span>
             </div>
             <p className="text-[11px] text-amber-800 leading-snug">
-              No significant GPS movement detected for {Math.max(5, Math.floor(stationarySeconds / 60))} consecutive minutes. Timer and distance calculation are paused until you resume riding.
+              No significant GPS movement detected for {Math.max(60, stationarySeconds)} consecutive seconds (1 minute). Timer and distance calculation are paused until you start moving again.
             </p>
           </div>
           <button
@@ -390,6 +595,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
               isAutoPausedRef.current = false;
               setIsAutoPaused(false);
               setIsPaused(false);
+              triggerResumingIndicator();
             }}
             className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0 cursor-pointer shadow-xs"
           >
@@ -404,38 +610,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         <span>Tracking for: {bike.year} {bike.brand} {bike.model}</span>
       </div>
 
-      {/* Live Leaflet Route Mini-Map View */}
-      <div
-        data-testid="gps-ride-leaflet-minimap"
-        className="rounded-2xl border border-slate-200 overflow-hidden bg-slate-100 shadow-inner"
-      >
-        <div className="px-3 py-1.5 bg-slate-900 text-white flex items-center justify-between text-[10px]">
-          <div className="flex items-center gap-1.5 font-bold">
-            <MapPin className="w-3 h-3 text-[#FF6B00]" />
-            <span>Live Route Mini-Map</span>
-            <span className="text-slate-400 font-mono">
-              ({latestPosition[0].toFixed(4)}, {latestPosition[1].toFixed(4)})
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="px-1.5 py-0.5 rounded bg-white/10 text-emerald-300 font-mono font-bold">
-              {routeCoords.length} {routeCoords.length === 1 ? 'pt' : 'pts'}
-            </span>
-            <button
-              type="button"
-              onClick={handleRecenterMap}
-              className="text-orange-300 hover:text-white font-bold flex items-center gap-0.5 cursor-pointer"
-              title="Recenter map on current position"
-              aria-label="Recenter map on current position"
-            >
-              <Navigation className="w-2.5 h-2.5" />
-              <span>Recenter</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Speedometer display matching screenshot 7 */}
+      {/* Speedometer display */}
       <div className="text-center py-1 space-y-0.5">
         <div className="text-[11px] font-bold tracking-widest text-slate-400 uppercase">
           SPEED
@@ -448,18 +623,24 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         </div>
       </div>
 
-      {/* 3 Metrics Row matching screenshot 7 */}
+      {/* 3 Metrics Row */}
       <div className="grid grid-cols-3 gap-2 text-center py-2 border-y border-slate-100">
         <div>
           <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">DISTANCE</div>
-          <div className="text-base font-extrabold text-[#FF6B00] font-mono mt-0.5">
+          <div
+            data-testid="gps-accumulated-distance"
+            className="text-base font-extrabold text-[#FF6B00] font-mono mt-0.5"
+          >
             +{distanceKm.toFixed(2)} km
           </div>
         </div>
 
         <div>
           <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">DURATION</div>
-          <div className="text-base font-extrabold text-slate-900 font-mono mt-0.5">
+          <div
+            data-testid="gps-elapsed-duration"
+            className="text-base font-extrabold text-slate-900 font-mono mt-0.5"
+          >
             {formatTime(elapsedSeconds)}
           </div>
         </div>
@@ -475,28 +656,38 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
       {/* Status Row, Auto-Pause Switch & Simulate Switch */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-          <span className={`w-2 h-2 rounded-full ${isAutoPaused ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-          <span>{isAutoPaused ? 'Stationary Auto-Pause' : 'GPS Locked (±5m)'}</span>
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isAutoPaused || isPaused
+                ? 'bg-amber-500'
+                : isResuming
+                ? 'bg-cyan-500'
+                : 'bg-emerald-500'
+            }`}
+          />
+          <span data-testid="gps-status-row-label">{trackingStatusLabel}</span>
         </div>
 
         <div className="flex items-center gap-3">
           <label
             className="flex items-center gap-1.5 cursor-pointer text-slate-600 font-medium"
-            title="Automatically pause ride timer after 5 minutes stationary"
+            title="Automatically pause ride timer after 1 minute stationary"
           >
             <input
               type="checkbox"
               checked={autoPauseEnabled}
               onChange={(e) => {
                 const enabled = e.target.checked;
+                autoPauseEnabledRef.current = enabled;
                 setAutoPauseEnabled(enabled);
                 if (!enabled) {
+                  isAutoPausedRef.current = false;
                   setIsAutoPaused(false);
                 }
               }}
               className="w-3.5 h-3.5 rounded border-slate-300 text-[#FF6B00] focus:ring-[#FF6B00] cursor-pointer"
             />
-            <span>Auto-Pause (5m)</span>
+            <span>Auto-Pause (1m)</span>
           </label>
 
           <label className="flex items-center gap-2 cursor-pointer text-slate-600 font-medium">
@@ -504,7 +695,10 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
             <input
               type="checkbox"
               checked={isSimulating}
-              onChange={(e) => setIsSimulating(e.target.checked)}
+              onChange={(e) => {
+                isSimulatingRef.current = e.target.checked;
+                setIsSimulating(e.target.checked);
+              }}
               className="sr-only peer"
             />
             <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF6B00] relative"></div>
@@ -512,7 +706,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         </div>
       </div>
 
-      {/* Auto-Increment Preview Banner matching screenshot 7 */}
+      {/* Auto-Increment Preview Banner */}
       <div className="p-3.5 rounded-2xl bg-[#FFFDF0] border border-amber-200 flex items-center justify-between">
         <div>
           <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">
@@ -530,19 +724,30 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
         </span>
       </div>
 
-      {/* Bottom Action Buttons matching screenshot 7 */}
+      {/* Bottom Action Buttons */}
       <div className="grid grid-cols-12 gap-2.5 pt-1">
         <button
           type="button"
+          data-testid="gps-manual-pause-resume-btn"
           onClick={() => {
             sounds.playClick();
             if (effectivelyPaused) {
+              const wasAutoPaused = isAutoPausedRef.current;
               stationarySecondsRef.current = 0;
               setStationarySeconds(0);
+              isAutoPausedRef.current = false;
               setIsAutoPaused(false);
+              isPausedRef.current = false;
               setIsPaused(false);
+              reanchorAfterManualPauseRef.current = true;
+              lastMoveTimestampRef.current = Date.now();
+              if (wasAutoPaused) {
+                triggerResumingIndicator();
+              }
             } else {
+              isPausedRef.current = true;
               setIsPaused(true);
+              setIsResuming(false);
             }
           }}
           title={effectivelyPaused ? 'Resume GPS ride tracking' : 'Pause GPS ride tracking'}
@@ -564,4 +769,5 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
     </div>
   );
 };
+
 

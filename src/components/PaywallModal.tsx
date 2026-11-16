@@ -18,6 +18,8 @@ import {
   Camera,
   CameraOff,
   MailWarning,
+  Navigation,
+  CalendarClock,
 } from 'lucide-react';
 import { sounds } from '../utils/audio';
 import { useAuth } from '../context/AuthContext';
@@ -221,6 +223,16 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
       icon: <BellRing className="w-4 h-4 text-amber-500" />,
       title: 'Unlimited Smart PMS Reminders',
       desc: 'Never miss Engine Oil, CVT Belt, Valve Clearance, or Coolant intervals.',
+    },
+    {
+      icon: <Navigation className="w-4 h-4 text-cyan-600" />,
+      title: 'Automatic GPS Ride Odometer',
+      desc: 'Automatically track motorcycle mileage through live GPS ride tracking. Automatically pauses after 1 minute of inactivity or idling and resumes when you start moving again. Keep your odometer records updated without manually entering every trip.',
+    },
+    {
+      icon: <CalendarClock className="w-4 h-4 text-blue-600" />,
+      title: 'Plate-Based LTO Renewal Reminders',
+      desc: 'Get timely reminders for motorcycle registration renewal based on your plate number, helping you avoid missed deadlines and late renewals.',
     },
     {
       icon: <FileSpreadsheet className="w-4 h-4 text-emerald-600" />,

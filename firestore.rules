@@ -158,6 +158,7 @@ service cloud.firestore {
           'bikeCount', 'lastBikeId', 'lastBikeAction', 'pendingSubmissionId',
           'lastPaymentId', 'subscriptionStartDate', 'expiryDate', 'billingAnchorDay',
           'approvedAt', 'approvedBy', 'revokedAt', 'revokedBy',
+          'grantedBy', 'grantedAt', 'grantNote', 'grantedMonths', 'grantPaid', 'grantedPaidAmountPhp',
           'createdAt', 'updatedAt', 'lastLoginAt'
         ]) &&
         affected.hasOnly([
@@ -245,6 +246,51 @@ service cloud.firestore {
         data.bikeId.size() <= 128 &&
         (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 2000)) &&
         isValidPartsList(data) &&
+        (
+          !exists(/databases/$(database)/documents/motorcycles/$(data.bikeId)) ||
+          get(/databases/$(database)/documents/motorcycles/$(data.bikeId)).data.userId == request.auth.uid
+        );
+    }
+
+    function isValidExpensePayload(data, expenseId) {
+      return data.keys().hasOnly([
+          'id', 'userId', 'bikeId', 'type', 'date', 'monthKey',
+          'amountPhp', 'liters', 'odometerKm', 'isFullTank', 'note',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.id == expenseId &&
+        expenseId.size() > 0 &&
+        expenseId.size() <= 128 &&
+        data.userId == request.auth.uid &&
+        data.bikeId is string &&
+        data.bikeId.size() > 0 &&
+        data.bikeId.size() <= 128 &&
+        data.type in [
+          'Gas',
+          'Maintenance',
+          'Registration (LTO)',
+          'Insurance',
+          'Parking-Toll',
+          'Iba pa'
+        ] &&
+        data.date is string &&
+        data.date.size() == 10 &&
+        data.monthKey is string &&
+        data.monthKey.size() == 7 &&
+        data.amountPhp is number &&
+        data.amountPhp > 0 &&
+        (!('liters' in data) || data.liters == null || (data.liters is number && data.liters > 0)) &&
+        (!('odometerKm' in data) || data.odometerKm == null || (data.odometerKm is number && data.odometerKm > 0)) &&
+        (!('isFullTank' in data) || data.isFullTank == null || data.isFullTank is bool) &&
+        (
+          data.type != 'Gas' ||
+          (
+            ('liters' in data) && data.liters is number && data.liters > 0 &&
+            ('odometerKm' in data) && data.odometerKm is number && data.odometerKm > 0 &&
+            ('isFullTank' in data) && data.isFullTank is bool
+          )
+        ) &&
+        (!('note' in data) || data.note == null || (data.note is string && data.note.size() <= 100)) &&
         (
           !exists(/databases/$(database)/documents/motorcycles/$(data.bikeId)) ||
           get(/databases/$(database)/documents/motorcycles/$(data.bikeId)).data.userId == request.auth.uid
@@ -469,6 +515,30 @@ service cloud.firestore {
         existsAfter(/databases/$(database)/documents/paymentSubmissions/$(request.resource.data.submissionId)) &&
         getAfter(/databases/$(database)/documents/paymentSubmissions/$(request.resource.data.submissionId)).data.referenceHash == refHash &&
         getAfter(/databases/$(database)/documents/paymentSubmissions/$(request.resource.data.submissionId)).data.userId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // 8. Fuel Log & Monthly Expenses (/expenses/{expenseId})
+    // ===============================================================
+    match /expenses/{expenseId} {
+      // Only the signed-in owner can read their own entries; isAdmin() can read for support.
+      allow get, list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+
+      // Creating and updating require an active, unexpired Pro status (or verified admin)
+      // plus strict schema validation on type, positive amountPhp, liters, odometerKm, and max 100-char note.
+      allow create: if isSignedIn() &&
+        isValidExpensePayload(request.resource.data, expenseId) &&
+        (isUserPro(request.auth.uid) || isAdmin());
+
+      allow update: if isSignedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.userId == resource.data.userId &&
+        isValidExpensePayload(request.resource.data, expenseId) &&
+        (isUserPro(request.auth.uid) || isAdmin());
+
+      // Owner can delete their own entries (and admin can delete for account cleanup).
+      allow delete: if (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
     }
 
     // Note: Firestore denies all unmatched paths by default.

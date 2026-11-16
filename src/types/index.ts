@@ -146,7 +146,47 @@ export type ActiveTab =
   | 'gps-ride'
   | 'lto'
   | 'preride'
-  | 'analytics';
+  | 'analytics'
+  | 'expenses';
+
+export type ExpenseEntryType =
+  | 'Gas'
+  | 'Maintenance'
+  | 'Registration (LTO)'
+  | 'Insurance'
+  | 'Parking-Toll'
+  | 'Iba pa';
+
+export interface ExpenseEntry {
+  id: string;
+  userId: string;
+  bikeId: string;
+  type: ExpenseEntryType;
+  date: string; // YYYY-MM-DD in Asia/Manila
+  monthKey: string; // YYYY-MM in Asia/Manila
+  amountPhp: number;
+  liters?: number | null;
+  odometerKm?: number | null;
+  isFullTank?: boolean | null;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BikeFuelStats {
+  bikeId: string;
+  hasEnoughData: boolean;
+  fullTankCount: number;
+  totalGasEntriesCount: number;
+  skippedEntriesCount: number;
+  skippedReasonText: string | null;
+  kmPerLiter: number | null;
+  costPerKmPhp: number | null;
+  totalDistanceKm: number;
+  totalFuelLiters: number;
+  totalFuelSpendPhp: number;
+}
+
 
 export type UserSubscriptionTier = 'free' | 'pro';
 export type PaymentMethod = 'gcash' | 'gotyme' | 'maribank' | 'maya' | 'card';

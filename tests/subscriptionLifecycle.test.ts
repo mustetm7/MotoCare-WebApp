@@ -184,5 +184,24 @@ console.log('--- Running MotoCare Subscription Lifecycle Unit Tests ---');
   console.log('✓ TEST 11 PASS: Firestore runTransaction guarantees all-or-nothing atomicity for submission approval and user tier activation.');
 }
 
-console.log('--- ALL 11 TESTS PASSED SUCCESSFULLY ---');
+// TEST 12: Expiry time is strictly 11:59:59 PM Asia/Manila and supports multi-month manual grants
+{
+  const nov10 = new Date('2026-11-10T01:30:00.000Z'); // Nov 10, 2026 9:30 AM Manila
+  const oneMonth = calculateNextMonthlyExpiry(nov10, undefined, 1);
+  const manila1 = new Date(new Date(oneMonth.expiryIso).getTime() + 8 * 3600 * 1000);
+  assert(manila1.getUTCFullYear() === 2026, 'Expected 2026');
+  assert(manila1.getUTCMonth() === 11, 'Expected December (11)');
+  assert(manila1.getUTCDate() === 10, 'Expected Dec 10');
+  assert(manila1.getUTCHours() === 23 && manila1.getUTCMinutes() === 59 && manila1.getUTCSeconds() === 59, 'Expected 23:59:59 Manila time');
+
+  const threeMonths = calculateNextMonthlyExpiry(nov10, undefined, 3);
+  const manila3 = new Date(new Date(threeMonths.expiryIso).getTime() + 8 * 3600 * 1000);
+  assert(manila3.getUTCFullYear() === 2027, 'Expected 2027');
+  assert(manila3.getUTCMonth() === 1, 'Expected February (1)');
+  assert(manila3.getUTCDate() === 10, 'Expected Feb 10');
+  assert(manila3.getUTCHours() === 23 && manila3.getUTCMinutes() === 59 && manila3.getUTCSeconds() === 59, 'Expected 23:59:59 Manila time');
+  console.log('✓ TEST 12 PASS: Expiry is set to 11:59:59 PM Asia/Manila for both 1-month and multi-month grants.');
+}
+
+console.log('--- ALL 12 TESTS PASSED SUCCESSFULLY ---');
 process.exit(0);

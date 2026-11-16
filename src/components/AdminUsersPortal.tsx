@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useDeferredValue } from 'react';
 import { UserAccountRecord, PaymentSubmissionRecord } from '../types';
 import {
   ShieldCheck,
@@ -31,8 +31,10 @@ import {
   fetchReviewedPaymentSubmissionsOnce,
   fetchAdminUsersPage,
   approveProAccessInFirestore,
+  grantProAccessInFirestore,
   revokeProAccessInFirestore,
   parseExpiryToDate,
+  formatManilaDateTime,
   calculateDaysRemaining,
   reconcileAllUserBikeCounts,
   BikeCountReconciliationReport,
@@ -86,37 +88,65 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   const lastUsersCursorRef = React.useRef<any>(null);
   const [hasMoreUsers, setHasMoreUsers] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingMoreUsers, setLoadingMoreUsers] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [statusFilter, setStatusFilter] = useState<
-    'all' | 'pending_approval' | 'active_pro' | 'rejected'
+    'all' | 'pending_approval' | 'active_pro' | 'rejected' | 'users'
   >('all');
   const [authError, setAuthError] = useState<string | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Manual "Grant Pro" Modal state
+  const [grantTargetUser, setGrantTargetUser] = useState<any | null>(null);
+  const [grantMonths, setGrantMonths] = useState<number>(1);
+  const [grantNote, setGrantNote] = useState<string>('');
+  const [grantMarkAsPaid, setGrantMarkAsPaid] = useState<boolean>(false);
+  const [grantSubmitting, setGrantSubmitting] = useState<boolean>(false);
+  const [grantModalError, setGrantModalError] = useState<string | null>(null);
 
   // Bike Counter Reconciliation state
   const [reconciling, setReconciling] = useState(false);
   const [reconciliationReport, setReconciliationReport] =
     useState<BikeCountReconciliationReport | null>(null);
 
-  // Load users on demand with getDocs + limit(100).
+  // Load users on demand with getDocs + limit(100) and startAfter(cursor).
   // Uses lastUsersCursorRef instead of state in useCallback dependencies so updating
   // the pagination cursor never recreates the callback or triggers an infinite useEffect loop.
   const loadUsersOnDemand = useCallback(
     async (reset = true) => {
       if (!isVerifiedAdmin) {
         setLoadingUsers(false);
+        setLoadingMoreUsers(false);
         return;
       }
-      setLoadingUsers(true);
+      if (reset) {
+        setLoadingUsers(true);
+      } else {
+        setLoadingMoreUsers(true);
+      }
       try {
         const cursor = reset ? null : lastUsersCursorRef.current;
         const page = await fetchAdminUsersPage(100, cursor);
         if (reset) {
           setFirestoreUsers(page.users);
         } else {
-          setFirestoreUsers((prev) => [...prev, ...page.users]);
+          setFirestoreUsers((prev) => {
+            const byId = new Map<string, any>();
+            for (const existing of prev) {
+              const key = String(existing.id || existing.uid || '');
+              if (key) byId.set(key, existing);
+            }
+            for (const incoming of page.users) {
+              const key = String(incoming.id || incoming.uid || '');
+              if (key) {
+                byId.set(key, incoming);
+              }
+            }
+            return Array.from(byId.values());
+          });
         }
         lastUsersCursorRef.current = page.lastDoc;
         setHasMoreUsers(page.hasMore);
@@ -126,6 +156,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         setActionError(msg);
       } finally {
         setLoadingUsers(false);
+        setLoadingMoreUsers(false);
       }
     },
     [isVerifiedAdmin]
@@ -236,6 +267,67 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
     }
   };
 
+  const handleRevokeUserProDirect = async (targetUser: any) => {
+    const targetUserId = targetUser?.id || targetUser?.uid;
+    if (!user?.email || !targetUserId) return;
+    setActionLoadingId(`user_${targetUserId}`);
+    setActionError(null);
+    try {
+      // Pass null for submissionId so revocation works even for manually granted Pro users
+      // who have no paymentSubmission document.
+      await revokeProAccessInFirestore(null, targetUserId, user.email);
+      sounds.playClick();
+      await Promise.all([loadUsersOnDemand(true), loadReviewedSubmissionsOnDemand()]);
+    } catch (err: any) {
+      console.error('Failed to revoke user Pro access:', err);
+      setActionError(err?.message || 'Failed to revoke user Pro subscription.');
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleOpenGrantProModal = (targetUser: any) => {
+    setGrantTargetUser(targetUser);
+    setGrantMonths(1);
+    setGrantNote('');
+    setGrantMarkAsPaid(false);
+    setGrantModalError(null);
+  };
+
+  const handleConfirmGrantPro = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetUserId = grantTargetUser?.id || grantTargetUser?.uid;
+    if (!user?.email || !targetUserId) return;
+    const trimmedNote = grantNote.trim();
+    if (!trimmedNote) {
+      setGrantModalError('Please enter a required note or reason for granting Pro.');
+      return;
+    }
+    const validMonths =
+      Number.isFinite(grantMonths) && grantMonths >= 1 ? Math.min(120, Math.floor(grantMonths)) : 1;
+
+    setGrantSubmitting(true);
+    setGrantModalError(null);
+    setActionError(null);
+    try {
+      await grantProAccessInFirestore({
+        userId: targetUserId,
+        adminEmail: user.email,
+        months: validMonths,
+        note: trimmedNote,
+        markAsPaid: grantMarkAsPaid,
+      });
+      sounds.playSuccess();
+      setGrantTargetUser(null);
+      await loadUsersOnDemand(true);
+    } catch (err: any) {
+      console.error('Failed to manually grant Pro access:', err);
+      setGrantModalError(err?.message || 'Failed to grant Pro access.');
+    } finally {
+      setGrantSubmitting(false);
+    }
+  };
+
   const handleRunBikeCountReconciliation = async (dryRun: boolean) => {
     setReconciling(true);
     setActionError(null);
@@ -276,9 +368,21 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
   const pendingCount = pendingSubmissions.length;
   const approvedPaymentsCount = submissions.filter((u) => u.status === 'active_pro').length;
-  const totalRevenuePhp = approvedPaymentsCount * 49;
+  const manualPaidGrantsRevenuePhp = firestoreUsers.reduce((sum, u) => {
+    if (
+      u &&
+      u.grantPaid === true &&
+      u.subscriptionStatus !== 'revoked' &&
+      typeof u.grantedPaidAmountPhp === 'number' &&
+      u.grantedPaidAmountPhp > 0
+    ) {
+      return sum + u.grantedPaidAmountPhp;
+    }
+    return sum;
+  }, 0);
+  const totalRevenuePhp = approvedPaymentsCount * 49 + manualPaidGrantsRevenuePhp;
 
-  // Count active PAID Pro users based on server expiryDate in `/users`
+  // Count active Pro users based on server expiryDate in `/users`
   const now = new Date();
   const activeProSubscribersCount = firestoreUsers.filter((u) =>
     isCountedAsActivePaidProSubscriber(u, now)
@@ -294,6 +398,38 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
     const matchesStatus = statusFilter === 'all' || u.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  // Pre-compute normalized lowercase search keys once per loaded batch to optimize
+  // local name/email filtering performance across large user datasets.
+  const indexedUsers = React.useMemo(() => {
+    return firestoreUsers.map((u) => ({
+      raw: u,
+      searchName: String(u.displayName || u.name || '').toLowerCase(),
+      searchEmail: String(u.email || '').toLowerCase(),
+      searchUid: String(u.id || u.uid || '').toLowerCase(),
+      searchTier: String(u.subscriptionTier || 'free').toLowerCase(),
+      searchNote: String(u.grantNote || '').toLowerCase(),
+    }));
+  }, [firestoreUsers]);
+
+  const filteredUsers = React.useMemo(() => {
+    const q = deferredSearchQuery.trim().toLowerCase();
+    if (!q) return firestoreUsers;
+    const matched: any[] = [];
+    for (let i = 0; i < indexedUsers.length; i++) {
+      const item = indexedUsers[i];
+      if (
+        item.searchName.includes(q) ||
+        item.searchEmail.includes(q) ||
+        item.searchUid.includes(q) ||
+        item.searchTier.includes(q) ||
+        item.searchNote.includes(q)
+      ) {
+        matched.push(item.raw);
+      }
+    }
+    return matched;
+  }, [firestoreUsers, indexedUsers, deferredSearchQuery]);
 
   // ============================================================================
   // ZERO-TRUST GOOGLE AUTHENTICATION GATE (Unauthenticated or Non-Admin User)
@@ -565,6 +701,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             </div>
             <div className="text-[11px] text-orange-200/80 mt-1">
               {approvedPaymentsCount} approved @ ₱49/mo
+              {manualPaidGrantsRevenuePhp > 0 ? ` (+₱${manualPaidGrantsRevenuePhp} paid grants)` : ''}
             </div>
           </div>
         </div>
@@ -577,7 +714,11 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by rider name, email, motorcycle, or GCash reference #..."
+              placeholder={
+                statusFilter === 'users'
+                  ? 'Search registered users by name, email, plan (Free/Pro), or grant note...'
+                  : 'Search by rider name, email, motorcycle, or GCash reference #...'
+              }
               className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700/80 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6B00]"
             />
           </div>
@@ -588,6 +729,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
               { id: 'pending_approval', label: `Pending (${pendingCount})` },
               { id: 'active_pro', label: `Approved (${approvedPaymentsCount})` },
               { id: 'rejected', label: 'Rejected' },
+              { id: 'users', label: `Users (${firestoreUsers.length})` },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -605,193 +747,488 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           </div>
         </div>
 
-        {/* Payment Submissions Queue */}
-        <div className="space-y-3">
-          {filteredSubmissions.length === 0 ? (
-            <div className="p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
-              <p className="text-sm font-bold text-slate-300">No payment submissions match your filter</p>
-              <p className="text-xs text-slate-500">
-                When riders submit a GCash reference number from the app, it will appear here in real time.
-              </p>
-            </div>
-          ) : (
-            filteredSubmissions.map((record) => {
-              const linkedUser = userProfileMap.get(record.userId);
-              const isUserRevoked = linkedUser?.subscriptionStatus === 'revoked';
-              const isPending = record.status === 'pending_approval';
-              const isPro = record.status === 'active_pro' && !isUserRevoked;
-              const isRejected = record.status === 'rejected' || isUserRevoked;
-              const isBusy = actionLoadingId === record.id;
-
-              const userExpiryDate = parseExpiryToDate(linkedUser?.expiryDate);
-              const userDaysLeft = calculateDaysRemaining(userExpiryDate, now);
-              const isUserExpired =
-                linkedUser?.subscriptionTier === 'pro' &&
-                userExpiryDate !== null &&
-                userExpiryDate.getTime() <= now.getTime();
-
-              return (
-                <div
-                  key={record.id}
-                  className={`p-4 sm:p-5 rounded-2xl border transition-all ${
-                    isPending
-                      ? 'bg-gradient-to-r from-amber-500/10 via-[#0E1525] to-[#0E1525] border-amber-500/40 shadow-lg shadow-amber-500/5'
-                      : isPro
-                      ? 'bg-[#0E1525] border-emerald-500/30'
-                      : 'bg-[#0E1525]/90 border-slate-800'
-                  }`}
+        {statusFilter === 'users' ? (
+          /* Registered Users Tab */
+          <div className="space-y-3" data-testid="admin-users-tab-list">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-400">
+              <span>
+                Showing <strong className="text-white font-mono">{filteredUsers.length}</strong> of{' '}
+                <strong className="text-white font-mono">{firestoreUsers.length}</strong> loaded user
+                {firestoreUsers.length === 1 ? '' : 's'}
+                {searchQuery.trim() ? ` matching "${searchQuery.trim()}"` : ''}
+              </span>
+              {searchQuery.trim() && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer"
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-extrabold text-sm sm:text-base text-white">
-                          {record.userName}
-                        </span>
-                        <span className="text-xs text-slate-400 font-mono">{record.userEmail}</span>
+                  Clear search filter
+                </button>
+              )}
+            </div>
 
-                        {isPending && (
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            Pending Verification
-                          </span>
-                        )}
-                        {isPro && (
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Approved (+1 Month)
-                          </span>
-                        )}
-                        {isRejected && (
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1">
-                            <XCircle className="w-3 h-3" />
-                            Rejected
-                          </span>
-                        )}
-                      </div>
+            {filteredUsers.length === 0 ? (
+              <div className="p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
+                <p className="text-sm font-bold text-slate-300">No registered users match your search</p>
+                <p className="text-xs text-slate-500">
+                  {hasMoreUsers
+                    ? 'Try clearing the search query or click "Load more" below to fetch the next batch of 100 users.'
+                    : 'Try clearing the search query or click Refresh to reload users from Firestore.'}
+                </p>
+              </div>
+            ) : (
+              filteredUsers.map((u) => {
+                const uid = u.id || u.uid || '';
+                const displayName = u.displayName || u.name || 'MotoCare Rider';
+                const email = u.email || 'No email';
+                const bikeCount = typeof u.bikeCount === 'number' ? u.bikeCount : 0;
+                const rawExpiry = parseExpiryToDate(u.expiryDate);
+                const validExpiry = rawExpiry && rawExpiry.getTime() > 0 ? rawExpiry : null;
+                const isRevoked = u.subscriptionStatus === 'revoked';
+                const isExpired =
+                  u.subscriptionTier === 'pro' &&
+                  !isRevoked &&
+                  validExpiry !== null &&
+                  validExpiry.getTime() <= now.getTime();
+                const isActivePro =
+                  u.subscriptionTier === 'pro' &&
+                  !isRevoked &&
+                  validExpiry !== null &&
+                  validExpiry.getTime() > now.getTime();
+                const daysLeft = validExpiry ? calculateDaysRemaining(validExpiry, now) : 0;
+                const isBusy = actionLoadingId === `user_${uid}`;
 
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
-                        <span className="flex items-center gap-1.5 text-slate-400">
-                          <Bike className="w-3.5 h-3.5 text-[#FF6B00]" />
-                          <strong className="text-slate-200">{record.bikeModel}</strong>
-                          {record.bikePlate && (
-                            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
-                              {record.bikePlate}
+                return (
+                  <div
+                    key={uid}
+                    className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                      isActivePro
+                        ? 'bg-[#0E1525] border-emerald-500/30'
+                        : 'bg-[#0E1525]/90 border-slate-800'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-extrabold text-sm sm:text-base text-white">
+                            {displayName}
+                          </span>
+                          <span className="text-xs text-slate-400 font-mono">{email}</span>
+
+                          {isActivePro ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                              <Crown className="w-3 h-3" />
+                              Pro
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700">
+                              Free
                             </span>
                           )}
-                        </span>
 
-                        {record.paymentMethod && (
-                          <span className="text-xs">
-                            Via:{' '}
-                            <strong className="uppercase text-cyan-300">
-                              {record.paymentMethod}
-                            </strong>
-                          </span>
-                        )}
-
-                        {record.referenceNumber && (
-                          <span className="font-mono text-xs bg-slate-900 px-2.5 py-0.5 rounded-lg border border-slate-700 text-amber-300 font-bold">
-                            Ref: {record.referenceNumber}
-                          </span>
-                        )}
-
-                        {record.amountPhp && (
-                          <span className="font-mono text-xs font-bold text-emerald-400">
-                            ₱{record.amountPhp}
-                          </span>
-                        )}
-                      </div>
-
-                      {userExpiryDate && (
-                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
-                          <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold ${
-                              isUserExpired
-                                ? 'bg-red-500/15 text-red-300 border border-red-500/30'
-                                : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
-                            }`}
-                          >
-                            <Calendar className="w-3 h-3" />
-                            Expires: {userExpiryDate.toLocaleDateString('en-PH', {
-                              year: 'numeric',
-                              month: 'short',
-                              day: 'numeric',
-                            })}
-                            {!isUserExpired && ` (${userDaysLeft}d remaining)`}
-                            {isUserExpired && ' (EXPIRED)'}
-                          </span>
-                          {typeof linkedUser?.bikeCount === 'number' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold bg-slate-800 text-slate-300">
-                              Bikes: {linkedUser.bikeCount}
+                          {isExpired && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500/15 text-red-300 border border-red-500/30">
+                              Expired
+                            </span>
+                          )}
+                          {isRevoked && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500/15 text-red-300 border border-red-500/30">
+                              Revoked
+                            </span>
+                          )}
+                          {u.paymentStatus === 'manual_grant' && isActivePro && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                              Manual Grant (Unpaid)
+                            </span>
+                          )}
+                          {u.grantPaid === true && isActivePro && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                              Manual Grant (Paid)
                             </span>
                           )}
                         </div>
-                      )}
 
-                      <div className="text-[11px] text-slate-500">
-                        Submitted: {new Date(record.submittedAt).toLocaleString()}
-                        {record.reviewedAt &&
-                          ` • Reviewed: ${new Date(record.reviewedAt).toLocaleString()}`}
+                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-bold bg-slate-800 text-slate-200 border border-slate-700">
+                            <Bike className="w-3 h-3 text-[#FF6B00]" />
+                            Bikes: {bikeCount}
+                          </span>
+
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-bold ${
+                              validExpiry
+                                ? isActivePro
+                                  ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                                  : 'bg-red-500/15 text-red-300 border border-red-500/30'
+                                : 'bg-slate-900 text-slate-400 border border-slate-800'
+                            }`}
+                          >
+                            <Calendar className="w-3 h-3" />
+                            Expiry (Manila):{' '}
+                            {validExpiry
+                              ? `${formatManilaDateTime(validExpiry)}${
+                                  isActivePro ? ` (${daysLeft}d left)` : ' (EXPIRED)'
+                                }`
+                              : isRevoked
+                              ? 'Revoked'
+                              : '—'}
+                          </span>
+                        </div>
+
+                        {u.grantedBy && u.grantedAt && (
+                          <div className="text-[11px] text-slate-400 pt-0.5">
+                            Granted by <span className="font-mono text-slate-300">{u.grantedBy}</span> on{' '}
+                            <span className="font-mono text-slate-300">
+                              {formatManilaDateTime(u.grantedAt)}
+                            </span>
+                            {u.grantedMonths ? ` (${u.grantedMonths} mo)` : ''}
+                            {u.grantNote ? ` • Note: "${u.grantNote}"` : ''}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* User Row Actions */}
+                      <div className="flex items-center gap-2 shrink-0">
+                        {!isActivePro && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => handleOpenGrantProModal(u)}
+                            className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-md shadow-orange-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <Crown className="w-3.5 h-3.5" />
+                            <span>Grant Pro</span>
+                          </button>
+                        )}
+
+                        {isActivePro && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => handleRevokeUserProDirect(u)}
+                            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                            title="Immediately revoke this user's Pro subscription"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>{isBusy ? 'Revoking...' : 'Revoke User Pro'}</span>
+                          </button>
+                        )}
                       </div>
                     </div>
+                  </div>
+                );
+              })
+            )}
 
-                    {/* Admin Action Buttons */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      {isPending && (
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => handleApproveSubmission(record)}
-                          className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>{isBusy ? 'Approving...' : 'Approve (+1 Month)'}</span>
-                        </button>
-                      )}
+            {/* Cursor-based "Load more" pagination inside Users tab */}
+            {hasMoreUsers && (
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  data-testid="admin-load-more-users-btn"
+                  disabled={loadingUsers || loadingMoreUsers}
+                  onClick={() => loadUsersOnDemand(false)}
+                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+                >
+                  {loadingMoreUsers || loadingUsers
+                    ? 'Loading more users...'
+                    : 'Load more (Next 100)'}
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Payment Submissions Queue */
+          <>
+            <div className="space-y-3">
+              {filteredSubmissions.length === 0 ? (
+                <div className="p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
+                  <p className="text-sm font-bold text-slate-300">No payment submissions match your filter</p>
+                  <p className="text-xs text-slate-500">
+                    When riders submit a GCash reference number from the app, it will appear here in real time.
+                  </p>
+                </div>
+              ) : (
+                filteredSubmissions.map((record) => {
+                  const linkedUser = userProfileMap.get(record.userId);
+                  const isUserRevoked = linkedUser?.subscriptionStatus === 'revoked';
+                  const isPending = record.status === 'pending_approval';
+                  const isPro = record.status === 'active_pro' && !isUserRevoked;
+                  const isRejected = record.status === 'rejected' || isUserRevoked;
+                  const isBusy = actionLoadingId === record.id;
 
-                      {isPending && (
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => handleRejectSubmission(record)}
-                          className="px-3.5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 border border-red-500/30 text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                        >
-                          <XCircle className="w-4 h-4" />
-                          <span>Reject</span>
-                        </button>
-                      )}
+                  const rawExpiryDate = parseExpiryToDate(linkedUser?.expiryDate);
+                  const userExpiryDate =
+                    rawExpiryDate && rawExpiryDate.getTime() > 0 ? rawExpiryDate : null;
+                  const userDaysLeft = calculateDaysRemaining(userExpiryDate, now);
+                  const isUserExpired =
+                    linkedUser?.subscriptionTier === 'pro' &&
+                    userExpiryDate !== null &&
+                    userExpiryDate.getTime() <= now.getTime();
 
-                      {isPro && (
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => handleRejectSubmission(record)}
-                          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                          title="Immediately revoke this user's Pro subscription"
-                        >
-                          <XCircle className="w-3.5 h-3.5" />
-                          <span>Revoke User Pro</span>
-                        </button>
-                      )}
+                  return (
+                    <div
+                      key={record.id}
+                      className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                        isPending
+                          ? 'bg-gradient-to-r from-amber-500/10 via-[#0E1525] to-[#0E1525] border-amber-500/40 shadow-lg shadow-amber-500/5'
+                          : isPro
+                          ? 'bg-[#0E1525] border-emerald-500/30'
+                          : 'bg-[#0E1525]/90 border-slate-800'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-1.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-extrabold text-sm sm:text-base text-white">
+                              {record.userName}
+                            </span>
+                            <span className="text-xs text-slate-400 font-mono">{record.userEmail}</span>
+
+                            {isPending && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                Pending Verification
+                              </span>
+                            )}
+                            {isPro && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Approved (+1 Month)
+                              </span>
+                            )}
+                            {isRejected && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1">
+                                <XCircle className="w-3 h-3" />
+                                Rejected
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
+                            <span className="flex items-center gap-1.5 text-slate-400">
+                              <Bike className="w-3.5 h-3.5 text-[#FF6B00]" />
+                              <strong className="text-slate-200">{record.bikeModel}</strong>
+                              {record.bikePlate && (
+                                <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
+                                  {record.bikePlate}
+                                </span>
+                              )}
+                            </span>
+
+                            {record.paymentMethod && (
+                              <span className="text-xs">
+                                Via:{' '}
+                                <strong className="uppercase text-cyan-300">
+                                  {record.paymentMethod}
+                                </strong>
+                              </span>
+                            )}
+
+                            {record.referenceNumber && (
+                              <span className="font-mono text-xs bg-slate-900 px-2.5 py-0.5 rounded-lg border border-slate-700 text-amber-300 font-bold">
+                                Ref: {record.referenceNumber}
+                              </span>
+                            )}
+
+                            {record.amountPhp && (
+                              <span className="font-mono text-xs font-bold text-emerald-400">
+                                ₱{record.amountPhp}
+                              </span>
+                            )}
+                          </div>
+
+                          {userExpiryDate && (
+                            <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold ${
+                                  isUserExpired
+                                    ? 'bg-red-500/15 text-red-300 border border-red-500/30'
+                                    : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                                }`}
+                              >
+                                <Calendar className="w-3 h-3" />
+                                Expires: {formatManilaDateTime(userExpiryDate)}
+                                {!isUserExpired && ` (${userDaysLeft}d remaining)`}
+                                {isUserExpired && ' (EXPIRED)'}
+                              </span>
+                              {typeof linkedUser?.bikeCount === 'number' && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold bg-slate-800 text-slate-300">
+                                  Bikes: {linkedUser.bikeCount}
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="text-[11px] text-slate-500">
+                            Submitted: {formatManilaDateTime(record.submittedAt)}
+                            {record.reviewedAt &&
+                              ` • Reviewed: ${formatManilaDateTime(record.reviewedAt)}`}
+                          </div>
+                        </div>
+
+                        {/* Admin Action Buttons */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {isPending && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleApproveSubmission(record)}
+                              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>{isBusy ? 'Approving...' : 'Approve (+1 Month)'}</span>
+                            </button>
+                          )}
+
+                          {isPending && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleRejectSubmission(record)}
+                              className="px-3.5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 border border-red-500/30 text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                            >
+                              <XCircle className="w-4 h-4" />
+                              <span>Reject</span>
+                            </button>
+                          )}
+
+                          {isPro && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleRejectSubmission(record)}
+                              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                              title="Immediately revoke this user's Pro subscription"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Revoke User Pro</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Pagination button for loading more users on demand */}
+            {hasMoreUsers && (
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  disabled={loadingUsers}
+                  onClick={() => loadUsersOnDemand(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+                >
+                  {loadingUsers ? 'Loading...' : 'Load More Users (Next 100)'}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Manual Grant Pro Modal */}
+        {grantTargetUser && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="w-full max-w-md rounded-3xl bg-[#0E1525] border border-slate-700 p-6 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center">
+                    <Crown className="w-5 h-5 text-slate-950" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-white">Grant Pro Access</h3>
+                    <p className="text-xs text-slate-400 font-mono">
+                      {grantTargetUser.email || grantTargetUser.displayName || grantTargetUser.id}
+                    </p>
                   </div>
                 </div>
-              );
-            })
-          )}
-        </div>
+                <button
+                  type="button"
+                  onClick={() => setGrantTargetUser(null)}
+                  className="text-xs text-slate-400 hover:text-white font-bold"
+                >
+                  Cancel
+                </button>
+              </div>
 
-        {/* Pagination button for loading more users on demand */}
-        {hasMoreUsers && (
-          <div className="pt-2 text-center">
-            <button
-              type="button"
-              disabled={loadingUsers}
-              onClick={() => loadUsersOnDemand(false)}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
-            >
-              {loadingUsers ? 'Loading...' : 'Load More Users (Next 100)'}
-            </button>
+              <form onSubmit={handleConfirmGrantPro} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Number of Months (Asia/Manila Calendar Months)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={grantMonths}
+                    onChange={(e) => setGrantMonths(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white font-mono focus:outline-none focus:border-[#FF6B00]"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Expires on the same calendar day at 11:59:59 PM Manila time (clamped to month end if needed).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Note / Reason <span className="text-red-400">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    required
+                    value={grantNote}
+                    onChange={(e) => setGrantNote(e.target.value)}
+                    placeholder="e.g., Beta tester reward, direct cash payment, promo giveaway..."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6B00]"
+                  />
+                </div>
+
+                <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-900/90 border border-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={grantMarkAsPaid}
+                    onChange={(e) => setGrantMarkAsPaid(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-600 text-[#FF6B00] focus:ring-[#FF6B00]"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-white block">
+                      Mark as paid (+₱{(Math.max(1, grantMonths || 1) * 49).toLocaleString()} to Verified Revenue)
+                    </span>
+                    <span className="text-slate-400 text-[11px]">
+                      Leave unchecked for complimentary grants so Verified Revenue is not affected.
+                    </span>
+                  </div>
+                </label>
+
+                {grantModalError && (
+                  <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-bold">
+                    {grantModalError}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={grantSubmitting}
+                    onClick={() => setGrantTargetUser(null)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={grantSubmitting}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-orange-500/20 cursor-pointer"
+                  >
+                    {grantSubmitting ? 'Granting Pro...' : `Confirm Grant (${grantMonths} Mo)`}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
 

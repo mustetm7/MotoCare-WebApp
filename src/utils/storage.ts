@@ -467,6 +467,344 @@ export function exportServiceAndMaintenanceCsv(
   return exportCasaServiceCsv(bike, records, reminders);
 }
 
+export interface MaintenanceCsvImportValidationResult {
+  validRecords: ServiceRecord[];
+  errors: string[];
+  warnings: string[];
+  detectedColumns: {
+    dateCol: string | null;
+    kilometerCol: string | null;
+    descriptionCol: string | null;
+  };
+}
+
+function splitCsvRow(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      fields.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+function normalizeCsvDateString(rawDate: string): string | null {
+  const trimmed = rawDate.trim().replace(/^["']|["']$/g, '');
+  if (!trimmed) return null;
+
+  // YYYY-MM-DD or YYYY/MM/DD
+  const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (isoMatch) {
+    const y = Number(isoMatch[1]);
+    const m = Number(isoMatch[2]);
+    const d = Number(isoMatch[3]);
+    if (y >= 1970 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const check = new Date(Date.UTC(y, m - 1, d));
+      if (
+        check.getUTCFullYear() === y &&
+        check.getUTCMonth() === m - 1 &&
+        check.getUTCDate() === d
+      ) {
+        return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+    }
+    return null;
+  }
+
+  // MM/DD/YYYY or MM-DD-YYYY
+  const mdyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (mdyMatch) {
+    const m = Number(mdyMatch[1]);
+    const d = Number(mdyMatch[2]);
+    const y = Number(mdyMatch[3]);
+    if (y >= 1970 && y <= 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const check = new Date(Date.UTC(y, m - 1, d));
+      if (
+        check.getUTCFullYear() === y &&
+        check.getUTCMonth() === m - 1 &&
+        check.getUTCDate() === d
+      ) {
+        return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      }
+    }
+    return null;
+  }
+
+  const parsedMs = Date.parse(trimmed);
+  if (!Number.isNaN(parsedMs)) {
+    const dt = new Date(parsedMs);
+    const y = dt.getFullYear();
+    const m = dt.getMonth() + 1;
+    const d = dt.getDate();
+    if (y >= 1970 && y <= 2100) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Parses and validates a CSV string of maintenance history records.
+ * Validates the presence of required columns:
+ *  - date (e.g. "Date", "Service Date", "Petsa")
+ *  - kilometer (e.g. "Kilometer", "Kilometers", "Odometer", "Odometer (km)", "KM")
+ *  - service description (e.g. "Service Description", "Description", "Service Task", "Title", "Service")
+ */
+export function parseAndValidateMaintenanceCsv(
+  csvText: string,
+  bike: Motorcycle,
+  userId?: string
+): MaintenanceCsvImportValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const validRecords: ServiceRecord[] = [];
+
+  const rawLines = (csvText || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n');
+
+  const contentLines: Array<{ lineNumber: number; text: string }> = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const trimmed = rawLines[i].trim();
+    if (!trimmed) continue;
+    // Stop if reaching the appended Scheduled Maintenance section from a MotoCare CSV export
+    if (/^#\s*Scheduled Maintenance Records/i.test(trimmed)) {
+      break;
+    }
+    if (trimmed.startsWith('#')) continue;
+    contentLines.push({ lineNumber: i + 1, text: trimmed });
+  }
+
+  if (contentLines.length === 0) {
+    return {
+      validRecords: [],
+      errors: ['CSV file is empty. Please provide a header row and at least one service record row.'],
+      warnings: [],
+      detectedColumns: { dateCol: null, kilometerCol: null, descriptionCol: null },
+    };
+  }
+
+  const headerFields = splitCsvRow(contentLines[0].text);
+  const normalizedHeaders = headerFields.map((h) =>
+    h.toLowerCase().replace(/^["']|["']$/g, '').trim()
+  );
+
+  const dateColIndex = normalizedHeaders.findIndex((h) =>
+    ['date', 'service date', 'petsa', 'date of service', 'log date'].includes(h)
+  );
+  const kilometerColIndex = normalizedHeaders.findIndex((h) =>
+    [
+      'kilometer',
+      'kilometers',
+      'odometer',
+      'odometer (km)',
+      'odometer km',
+      'km',
+      'mileage',
+      'mileage (km)',
+      'odo',
+    ].includes(h)
+  );
+  const descriptionColIndex = normalizedHeaders.findIndex((h) =>
+    [
+      'service description',
+      'description',
+      'service task',
+      'title',
+      'service',
+      'task',
+      'work done',
+      'maintenance task',
+    ].includes(h)
+  );
+
+  const missingColumns: string[] = [];
+  if (dateColIndex === -1) missingColumns.push('date');
+  if (kilometerColIndex === -1) missingColumns.push('kilometer');
+  if (descriptionColIndex === -1) missingColumns.push('service description');
+
+  const detectedColumns = {
+    dateCol: dateColIndex >= 0 ? headerFields[dateColIndex] : null,
+    kilometerCol: kilometerColIndex >= 0 ? headerFields[kilometerColIndex] : null,
+    descriptionCol: descriptionColIndex >= 0 ? headerFields[descriptionColIndex] : null,
+  };
+
+  if (missingColumns.length > 0) {
+    errors.push(
+      `Missing required CSV column(s): ${missingColumns.join(', ')}. Expected columns for Date, Kilometer (Odometer), and Service Description.`
+    );
+    return {
+      validRecords: [],
+      errors,
+      warnings,
+      detectedColumns,
+    };
+  }
+
+  const categoryColIndex = normalizedHeaders.findIndex((h) => h === 'category');
+  const shopColIndex = normalizedHeaders.findIndex((h) =>
+    ['shop', 'shop name', 'service center / shop', 'service center', 'workshop'].includes(h)
+  );
+  const typeColIndex = normalizedHeaders.findIndex((h) =>
+    ['type', 'service type'].includes(h)
+  );
+  const oilColIndex = normalizedHeaders.findIndex((h) =>
+    ['oil', 'oil grade / brand', 'oil brand', 'oil grade'].includes(h)
+  );
+  const laborColIndex = normalizedHeaders.findIndex((h) =>
+    ['labor', 'labor (php)', 'labor cost', 'labor cost (php)'].includes(h)
+  );
+  const totalCostColIndex = normalizedHeaders.findIndex((h) =>
+    ['total cost (php)', 'total cost', 'cost', 'cost (php)', 'amount', 'amount (php)', 'price'].includes(h)
+  );
+  const receiptColIndex = normalizedHeaders.findIndex((h) =>
+    ['official receipt #', 'receipt #', 'receipt', 'or #'].includes(h)
+  );
+  const casaColIndex = normalizedHeaders.findIndex((h) =>
+    ['casa verified', 'casa'].includes(h)
+  );
+  const notesColIndex = normalizedHeaders.findIndex((h) =>
+    ['notes', 'mechanic notes', 'note', 'remarks'].includes(h)
+  );
+
+  if (contentLines.length === 1) {
+    errors.push('CSV contains a header row but no service history rows to import.');
+    return {
+      validRecords: [],
+      errors,
+      warnings,
+      detectedColumns,
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+  const bikeSnapshot = `${bike.year} ${bike.brand} ${bike.model}${bike.licensePlate ? ` (${bike.licensePlate})` : ''}`;
+
+  for (let idx = 1; idx < contentLines.length; idx++) {
+    const { lineNumber, text } = contentLines[idx];
+    const cols = splitCsvRow(text);
+
+    const rawDate = cols[dateColIndex] ?? '';
+    const rawKm = cols[kilometerColIndex] ?? '';
+    const rawDesc = (cols[descriptionColIndex] ?? '').replace(/^["']|["']$/g, '').trim();
+
+    const normalizedDate = normalizeCsvDateString(rawDate);
+    if (!normalizedDate) {
+      errors.push(`Row ${lineNumber}: Invalid or missing date "${rawDate}". Use YYYY-MM-DD (e.g. 2025-05-14).`);
+      continue;
+    }
+
+    const cleanedKmStr = rawKm.replace(/,/g, '').replace(/km$/i, '').trim();
+    const parsedKm = cleanedKmStr === '' ? NaN : Number(cleanedKmStr);
+    if (!Number.isFinite(parsedKm) || parsedKm < 0) {
+      errors.push(
+        `Row ${lineNumber}: Invalid kilometer reading "${rawKm}". Must be a non-negative number.`
+      );
+      continue;
+    }
+
+    if (!rawDesc) {
+      errors.push(`Row ${lineNumber}: Missing service description.`);
+      continue;
+    }
+
+    const rawTotalCost = totalCostColIndex >= 0 ? (cols[totalCostColIndex] ?? '') : '';
+    const cleanedCost = rawTotalCost.replace(/[₱,php\s]/gi, '').trim();
+    const parsedTotalCost = cleanedCost ? Number(cleanedCost) : 0;
+    const totalCostPhp = Number.isFinite(parsedTotalCost) && parsedTotalCost >= 0 ? parsedTotalCost : 0;
+
+    const rawLabor = laborColIndex >= 0 ? (cols[laborColIndex] ?? '') : '';
+    const cleanedLabor = rawLabor.replace(/[₱,php\s]/gi, '').trim();
+    const parsedLabor = cleanedLabor ? Number(cleanedLabor) : 0;
+    const laborCostPhp = Number.isFinite(parsedLabor) && parsedLabor >= 0 ? parsedLabor : 0;
+
+    const rawType = typeColIndex >= 0 ? (cols[typeColIndex] ?? '').trim() : '';
+    const resolvedType: ServiceRecord['type'] =
+      rawType.toLowerCase().includes('casa') || rawType.toLowerCase().includes('3s')
+        ? 'Casa / Official 3S'
+        : rawType.toLowerCase() === 'diy'
+        ? 'DIY'
+        : 'Independent Shop';
+
+    const rawCasa = casaColIndex >= 0 ? (cols[casaColIndex] ?? '').trim().toLowerCase() : '';
+    const isCasaVerified =
+      rawCasa === 'yes' || rawCasa === 'true' || rawCasa === '1' || resolvedType === 'Casa / Official 3S';
+
+    const shopName =
+      shopColIndex >= 0 && cols[shopColIndex]
+        ? cols[shopColIndex].trim().slice(0, 120)
+        : resolvedType === 'DIY'
+        ? 'DIY Home Garage'
+        : 'Workshop';
+
+    const oilBrandGrade =
+      oilColIndex >= 0 && cols[oilColIndex] && cols[oilColIndex] !== 'N/A'
+        ? cols[oilColIndex].trim().slice(0, 120)
+        : undefined;
+
+    const receiptNumber =
+      receiptColIndex >= 0 && cols[receiptColIndex] && cols[receiptColIndex] !== 'N/A'
+        ? cols[receiptColIndex].trim().slice(0, 80)
+        : undefined;
+
+    const notes =
+      notesColIndex >= 0 && cols[notesColIndex]
+        ? cols[notesColIndex].trim().slice(0, 500)
+        : 'Imported via CSV';
+
+    const rawCategory = categoryColIndex >= 0 ? (cols[categoryColIndex] ?? '').trim() : '';
+    const resolvedCategory = (rawCategory || 'General Inspection') as ServiceRecord['category'];
+
+    const record: ServiceRecord = {
+      id: `rec_csv_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 7)}`,
+      ...(userId ? { userId } : {}),
+      bikeId: bike.id,
+      bikeLabelSnapshot: bikeSnapshot,
+      date: normalizedDate,
+      odometer: Math.round(parsedKm),
+      title: rawDesc.slice(0, 200),
+      category: resolvedCategory,
+      type: resolvedType,
+      shopName,
+      ...(oilBrandGrade ? { oilBrandGrade } : {}),
+      parts: [],
+      laborCostPhp,
+      totalCostPhp,
+      notes,
+      ...(receiptNumber ? { receiptNumber } : {}),
+      isCasaVerified,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      cloudVersion: 1,
+      timestampSource: 'client_pending',
+    };
+
+    validRecords.push(record);
+  }
+
+  return {
+    validRecords,
+    errors,
+    warnings,
+    detectedColumns,
+  };
+}
+
 export const THEME_STORAGE_KEY = 'motocare_theme_preference';
 export type ThemeMode = 'light' | 'dark';
 

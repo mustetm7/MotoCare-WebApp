@@ -1,7 +1,7 @@
 import React from 'react';
 import { Motorcycle, MaintenanceReminder, ActiveTab } from '../types';
 import { analyzeReminder } from '../utils/storage';
-import { Gauge, Navigation, SlidersHorizontal, Wrench, Clock, Bike, CheckCircle2, AlertTriangle, Edit3 } from 'lucide-react';
+import { Gauge, Navigation, SlidersHorizontal, Wrench, Clock, Bike, CheckCircle2, AlertTriangle, Edit3, Fuel } from 'lucide-react';
 import { sounds } from '../utils/audio';
 
 interface GarageHeaderProps {
@@ -217,15 +217,15 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
         </div>
       </div>
 
-      {/* Tabs Navigation matching screenshot */}
-      <div className="flex items-center justify-around border-b border-slate-200 pt-2">
+      {/* Tabs Navigation */}
+      <div className="flex items-center justify-around border-b border-slate-200 pt-2 overflow-x-auto">
         <button
           type="button"
           onClick={() => {
             sounds.playClick();
-            onTabChange('garage');
+            onTabChange('reminders');
           }}
-          className={`pb-3 px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative ${
+          className={`pb-3 px-3 sm:px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative whitespace-nowrap cursor-pointer ${
             activeTab === 'garage' || activeTab === 'reminders'
               ? 'text-[#FF6B00]'
               : 'text-slate-400 hover:text-slate-700'
@@ -242,17 +242,40 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           type="button"
           onClick={() => {
             sounds.playClick();
-            onTabChange('logbook');
+            onTabChange('history');
           }}
-          className={`pb-3 px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative ${
-            activeTab === 'logbook'
+          className={`pb-3 px-3 sm:px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative whitespace-nowrap cursor-pointer ${
+            activeTab === 'logbook' || activeTab === 'history'
               ? 'text-[#FF6B00]'
               : 'text-slate-400 hover:text-slate-700'
           }`}
         >
           <Clock className="w-4 h-4" />
           <span>History</span>
-          {activeTab === 'logbook' && (
+          {(activeTab === 'logbook' || activeTab === 'history') && (
+            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#FF6B00] rounded-full" />
+          )}
+        </button>
+
+        <button
+          type="button"
+          data-testid="tab-fuel-expenses"
+          onClick={() => {
+            sounds.playClick();
+            onTabChange('expenses');
+          }}
+          className={`pb-3 px-3 sm:px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative whitespace-nowrap cursor-pointer ${
+            activeTab === 'expenses' || activeTab === 'analytics'
+              ? 'text-[#FF6B00]'
+              : 'text-slate-400 hover:text-slate-700'
+          }`}
+        >
+          <Fuel className="w-4 h-4" />
+          <span>Fuel &amp; Gastos</span>
+          <span className="text-[9px] font-black px-1 py-0.2 rounded bg-slate-900 text-amber-400 font-mono">
+            PRO
+          </span>
+          {(activeTab === 'expenses' || activeTab === 'analytics') && (
             <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#FF6B00] rounded-full" />
           )}
         </button>
@@ -263,7 +286,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
             sounds.playClick();
             onTabChange('lto');
           }}
-          className={`pb-3 px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative ${
+          className={`pb-3 px-3 sm:px-4 font-bold text-xs flex items-center gap-1.5 transition-colors relative whitespace-nowrap cursor-pointer ${
             activeTab === 'lto'
               ? 'text-[#FF6B00]'
               : 'text-slate-400 hover:text-slate-700'

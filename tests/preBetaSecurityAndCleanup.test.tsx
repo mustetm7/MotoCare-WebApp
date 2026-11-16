@@ -1028,10 +1028,8 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
       />
     );
 
-    expect(screen.getByText('LIVE TRACKING')).not.toBeNull();
+    expect(screen.getByTestId('gps-active-tracking-badge').textContent).toBe('Tracking');
     expect(screen.getByText('Tracking for: 2026 Yamaha NMAX 155')).not.toBeNull();
-    expect(screen.getByTestId('gps-ride-leaflet-minimap')).not.toBeNull();
-    expect(screen.getByText('Live Route Mini-Map')).not.toBeNull();
     expect(watchCallback).not.toBeNull();
 
     // Emit initial GPS fix (Manila: 14.5995, 120.9842) and second fix ~3.34 km north (14.6295, 120.9842) at 12.5 m/s (45 km/h)
@@ -1047,8 +1045,6 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
     expect(screen.getByText('45')).not.toBeNull();
     expect(screen.getByText('45 km/h')).not.toBeNull();
     expect(screen.getByText('+3.34 km')).not.toBeNull();
-    expect(screen.getByText('2 pts')).not.toBeNull();
-    expect(screen.getByText('(14.6295, 120.9842)')).not.toBeNull();
     expect(screen.getByText('1200 km')).not.toBeNull();
     expect(screen.getByText('1203 km')).not.toBeNull();
     expect(screen.getByText('+3 km')).not.toBeNull();
@@ -1337,10 +1333,10 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
     expect(localStorage.getItem(REMEMBERED_EMAIL_STORAGE_KEY)).toBeNull();
   });
 
-  it('Test O: GPS Ride Tracker auto-pauses after 5 minutes (300s) stationary to prevent distance drift and accurately calculate active ride time', () => {
+  it('Test O: GPS Ride Tracker auto-pauses after 1 minute (60s) stationary to prevent distance drift and accurately calculate active ride time', () => {
     vi.useFakeTimers();
     try {
-      expect(AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS).toBe(300);
+      expect(AUTO_PAUSE_STATIONARY_THRESHOLD_SECONDS).toBe(60);
 
       let watchSuccessCallback: ((pos: any) => void) | null = null;
       Object.defineProperty(navigator, 'geolocation', {
@@ -1392,25 +1388,27 @@ describe('MotoCare Pre-Beta Subscription Security & Demo Data Cleanup Regression
         />
       );
 
-      // GPS Ride starts in LIVE TRACKING mode
-      expect(screen.getByText('LIVE TRACKING')).not.toBeNull();
+      // GPS Ride starts in Tracking mode
+      expect(screen.getByTestId('gps-active-tracking-badge').textContent).toBe('Tracking');
 
-      // Advance 300 seconds (5 minutes) with 0 km/h speed -> triggers stationary auto-pause
+      // Advance 60 seconds (1 minute) with 0 km/h speed -> triggers stationary auto-pause
       React.act(() => {
-        vi.advanceTimersByTime(300 * 1000);
+        vi.advanceTimersByTime(60 * 1000);
       });
 
-      expect(screen.getByTestId('gps-auto-paused-badge')).not.toBeNull();
+      expect(screen.getByTestId('gps-auto-paused-badge').textContent).toBe(
+        'Paused - Motorcycle Stationary'
+      );
       expect(screen.getByTestId('gps-auto-pause-banner')).not.toBeNull();
 
-      // Active ride duration stops incrementing while auto-paused (8s initial + 299s = 307s -> 05:07)
-      expect(screen.getByText('05:07')).not.toBeNull();
+      // Active ride duration stops incrementing while auto-paused (8s initial + 59s = 67s -> 01:07)
+      expect(screen.getByText('01:07')).not.toBeNull();
 
       React.act(() => {
         vi.advanceTimersByTime(120 * 1000); // another 2 minutes stationary
       });
-      // Still 05:07 active ride time!
-      expect(screen.getByText('05:07')).not.toBeNull();
+      // Still 01:07 active ride time!
+      expect(screen.getByText('01:07')).not.toBeNull();
 
       // Simulate motorcycle moving again via GPS coordinates
       if (watchSuccessCallback) {
