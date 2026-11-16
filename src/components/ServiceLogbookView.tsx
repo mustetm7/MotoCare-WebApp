@@ -153,7 +153,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
   return (
     <div className="space-y-5">
       {/* Top Back Navigation Bar */}
-      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-100">
         <button
           type="button"
           onClick={() => {
@@ -162,11 +162,11 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
           }}
           className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#FF6B00] shadow-2xs group"
         >
-          <ArrowLeft className="w-4 h-4 text-[#FF6B00] group-hover:-translate-x-0.5 transition-transform" />
+          <ArrowLeft className="w-4 h-4 text-[#FF6B00] group-hover:-translate-x-0.5 transition-transform shrink-0" />
           <span>Back to Schedule</span>
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {bike?.id && hasArchivedBikeRecords && (
             <button
               type="button"
@@ -357,7 +357,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
                   data-testid="csv-valid-preview"
                   className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2"
                 >
-                  <div className="flex items-center justify-between text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span className="font-extrabold text-emerald-700">
                       Ready to Import: {csvValidation.validRecords.length} valid record
                       {csvValidation.validRecords.length === 1 ? '' : 's'}
@@ -397,26 +397,26 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
       )}
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-        <div className="p-3.5 rounded-2xl bg-white border border-slate-100 shadow-sm">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Total Documented</div>
-          <div className="text-lg font-extrabold font-mono text-slate-900 mt-0.5">
+      <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 gap-2.5">
+        <div className="p-3.5 rounded-2xl bg-white border border-slate-100 shadow-sm min-w-0">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide truncate">Total Documented</div>
+          <div className="text-lg font-extrabold font-mono text-slate-900 mt-0.5 truncate">
             ₱{totalSpentPhp.toLocaleString()}
           </div>
           <div className="text-[10px] text-slate-400">{bikeRecords.length} services</div>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-white border border-slate-100 shadow-sm">
-          <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide">DIY Saved</div>
-          <div className="text-lg font-extrabold font-mono text-emerald-600 mt-0.5">
+        <div className="p-3.5 rounded-2xl bg-white border border-slate-100 shadow-sm min-w-0">
+          <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide truncate">DIY Saved</div>
+          <div className="text-lg font-extrabold font-mono text-emerald-600 mt-0.5 truncate">
             +₱{estimatedDiyLaborSaved.toLocaleString()}
           </div>
           <div className="text-[10px] text-slate-400">{diyRecords.length} home services</div>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-white border border-slate-100 shadow-sm col-span-2 sm:col-span-1">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Casa 3S Stamps</div>
-          <div className="text-lg font-extrabold font-mono text-[#00ACC1] mt-0.5">
+        <div className="p-3.5 rounded-2xl bg-white border border-slate-100 shadow-sm xs:col-span-2 sm:col-span-1 min-w-0">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide truncate">Casa 3S Stamps</div>
+          <div className="text-lg font-extrabold font-mono text-[#00ACC1] mt-0.5 truncate">
             {casaRecords.length} Verified
           </div>
           <div className="text-[10px] text-slate-400">Authorized dealers</div>
@@ -425,12 +425,12 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
 
       {/* Search & Type filter */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-xs overflow-x-auto">
+        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-xs overflow-x-auto no-scrollbar">
           {(['all', 'Casa / Official 3S', 'Independent Shop', 'DIY'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTypeFilter(t)}
-              className={`px-3 py-1 rounded-lg font-bold text-[11px] whitespace-nowrap transition-colors ${
+              className={`px-3 py-1.5 rounded-lg font-bold text-[11px] whitespace-nowrap transition-colors shrink-0 ${
                 typeFilter === t ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
@@ -446,7 +446,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search records..."
-            className="w-full sm:w-48 bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
+            className="w-full sm:w-48 bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 sm:py-1.5 text-xs text-slate-800 focus:outline-none focus:border-[#FF6B00]"
           />
         </div>
       </div>
@@ -457,10 +457,10 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
           {filteredRecords.map((record) => (
             <div
               key={record.id}
-              className="p-4 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex items-start justify-between gap-3 text-xs"
+              className="p-3.5 sm:p-4 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex flex-col xs:flex-row xs:items-start justify-between gap-2.5 xs:gap-3 text-xs"
             >
-              <div className="space-y-1 flex-1">
-                <div className="flex items-center gap-2 text-[11px]">
+              <div className="space-y-1 flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px]">
                   <span className="font-bold text-slate-500 font-mono">{record.date}</span>
                   <span className="text-slate-300">·</span>
                   <span className="font-bold text-[#FF6B00] font-mono">{record.odometer.toLocaleString()} km</span>
@@ -474,23 +474,23 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
                   )}
                 </div>
 
-                <h4 className="text-sm font-bold text-slate-900">{record.title}</h4>
+                <h4 className="text-sm font-bold text-slate-900 break-words">{record.title}</h4>
 
-                <div className="text-[11px] text-slate-500">
+                <div className="text-[11px] text-slate-500 break-words">
                   {record.shopName || 'Workshop'} {record.oilBrandGrade ? `· ${record.oilBrandGrade}` : ''}
                 </div>
 
                 {record.notes && (
-                  <p className="text-[11px] text-slate-400 pt-0.5">{record.notes}</p>
+                  <p className="text-[11px] text-slate-400 pt-0.5 break-words">{record.notes}</p>
                 )}
               </div>
 
-              <div className="text-right shrink-0">
+              <div className="flex xs:block items-center justify-between pt-2 xs:pt-0 border-t xs:border-t-0 border-slate-100 xs:text-right shrink-0">
                 <div className="font-extrabold text-sm font-mono text-slate-900">
                   ₱{record.totalCostPhp.toLocaleString()}
                 </div>
                 {confirmDeleteRecordId === record.id ? (
-                  <div className="flex items-center gap-1 mt-2 justify-end animate-in fade-in">
+                  <div className="flex items-center gap-1 xs:mt-2 justify-end animate-in fade-in">
                     <span className="text-[10px] text-red-600 font-bold">Delete?</span>
                     <button
                       type="button"
@@ -520,7 +520,7 @@ export const ServiceLogbookView: React.FC<ServiceLogbookViewProps> = ({
                       sounds.playClick();
                       setConfirmDeleteRecordId(record.id);
                     }}
-                    className="p-1 text-slate-300 hover:text-red-500 transition-colors mt-2"
+                    className="p-1 text-slate-300 hover:text-red-500 transition-colors xs:mt-2"
                     title={`Delete service record: ${record.title}`}
                     aria-label={`Delete service record: ${record.title}`}
                   >

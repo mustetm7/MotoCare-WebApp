@@ -150,7 +150,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto text-xs">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs">
           <div>
             <label className="block font-bold text-slate-700 mb-1">
               Service Task / Title *
@@ -165,7 +165,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
                 Date Completed
@@ -194,7 +194,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
                 Service Category
@@ -284,7 +284,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
           )}
 
           {/* Receipt & Casa Stamp */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
                 Official Receipt / Invoice #
@@ -298,7 +298,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
               />
             </div>
 
-            <div className="flex items-center pt-5">
+            <div className="flex items-center pt-1 xs:pt-5">
               <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-700">
                 <input
                   type="checkbox"
@@ -307,7 +307,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
                   className="rounded text-[#FF6B00] focus:ring-0"
                 />
                 <span className="flex items-center gap-1 font-bold text-emerald-600">
-                  <ShieldCheck className="w-3.5 h-3.5" /> Casa Verified Stamp
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0" /> Casa Verified Stamp
                 </span>
               </label>
             </div>
@@ -411,7 +411,7 @@ export const AddServiceRecordModal: React.FC<AddServiceRecordModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={onClose}

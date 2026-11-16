@@ -409,7 +409,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
         <form
           onSubmit={handleSubmit}
           noValidate
-          className="p-5 overflow-y-auto space-y-4 text-xs"
+          className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs"
         >
           {/* Mode Banner: Either "Wala sa listahan ang motor mo? Idagdag ito manually." OR "Back to Preset List" */}
           {!isCustomMode ? (
@@ -435,7 +435,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               </button>
             </div>
           ) : (
-            <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-100 border border-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-slate-100 border border-slate-200">
               <div className="text-[11px] font-bold text-slate-700">
                 Custom Motorcycle Entry
               </div>
@@ -619,7 +619,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
           </div>
 
           {/* 4. Year Model & 6. Current Odometer Reading Row */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label htmlFor="motorcycle-year-input" className="font-bold text-slate-700 block">
                 Year Model *
@@ -813,7 +813,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
             </div>
 
             {/* 9 Color circles */}
-            <div className="flex items-center justify-between gap-1.5 pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               {COLOR_SWATCHES.map((color) => (
                 <button
                   key={color}
@@ -824,7 +824,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
                     setCustomHexInput(color.replace('#', ''));
                   }}
                   aria-label={`Select badge color ${color}`}
-                  className={`w-7 h-7 rounded-full transition-transform ${
+                  className={`w-7 h-7 rounded-full transition-transform shrink-0 ${
                     badgeColor.toLowerCase() === color.toLowerCase()
                       ? 'ring-2 ring-offset-2 ring-slate-800 scale-110'
                       : 'hover:scale-105'

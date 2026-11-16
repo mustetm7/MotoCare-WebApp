@@ -211,7 +211,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto text-xs">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-5 space-y-4 overflow-y-auto text-xs">
           <div>
             <label className="block font-bold text-slate-700 mb-1">
               Task Title *
@@ -226,7 +226,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
                 Category
@@ -278,7 +278,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
                 Last Performed Odometer (km)
@@ -320,7 +320,7 @@ export const AddReminderModal: React.FC<AddReminderModalProps> = ({
             />
           </div>
 
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <div>
               {editingReminder && onDelete && (
                 confirmDelete ? (

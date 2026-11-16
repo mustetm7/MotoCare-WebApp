@@ -31,7 +31,7 @@ export const LtoView: React.FC<LtoViewProps> = ({
   return (
     <div className="space-y-5">
       {/* Top Back Navigation Bar */}
-      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-100">
         <button
           type="button"
           onClick={() => {
@@ -40,7 +40,7 @@ export const LtoView: React.FC<LtoViewProps> = ({
           }}
           className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#FF6B00] shadow-2xs group"
         >
-          <ArrowLeft className="w-4 h-4 text-[#FF6B00] group-hover:-translate-x-0.5 transition-transform" />
+          <ArrowLeft className="w-4 h-4 text-[#FF6B00] group-hover:-translate-x-0.5 transition-transform shrink-0" />
           <span>Back to Schedule</span>
         </button>
 
@@ -51,8 +51,8 @@ export const LtoView: React.FC<LtoViewProps> = ({
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+        <div className="min-w-0">
+          <h2 className="text-xl font-extrabold text-slate-900 tracking-tight flex flex-wrap items-center gap-2">
             <span>Philippine LTO Registration</span>
             <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-200">
               RA 4136
@@ -64,17 +64,17 @@ export const LtoView: React.FC<LtoViewProps> = ({
         </div>
 
         {/* Plate editor */}
-        <form onSubmit={handlePlateSubmit} className="flex items-center gap-1.5">
+        <form onSubmit={handlePlateSubmit} className="flex items-center gap-1.5 w-full sm:w-auto">
           <input
             type="text"
             placeholder="e.g. ND 8492"
             value={plateInput}
             onChange={(e) => setPlateInput(e.target.value.toUpperCase())}
-            className="w-32 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-slate-900 uppercase text-center focus:outline-none focus:border-[#FF6B00]"
+            className="flex-1 sm:w-32 min-w-0 bg-white border border-slate-200 rounded-xl px-3 py-2 sm:py-1.5 text-xs font-mono font-bold text-slate-900 uppercase text-center focus:outline-none focus:border-[#FF6B00]"
           />
           <button
             type="submit"
-            className="px-3 py-1.5 text-xs font-bold bg-[#FF6B00] text-white rounded-xl shadow-2xs hover:bg-[#EA580C]"
+            className="px-3.5 py-2 sm:py-1.5 text-xs font-bold bg-[#FF6B00] text-white rounded-xl shadow-2xs hover:bg-[#EA580C] shrink-0"
           >
             Update
           </button>
@@ -82,14 +82,14 @@ export const LtoView: React.FC<LtoViewProps> = ({
       </div>
 
       {/* Plate Card */}
-      <div className="p-5 rounded-3xl bg-white border border-slate-100 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row items-center gap-5">
+      <div className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-100 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-5">
           {/* Virtual Plate */}
           <div className="w-full sm:w-56 p-3.5 rounded-2xl bg-white text-slate-900 border-2 border-slate-900 shadow-md text-center select-none shrink-0">
             <div className="text-[9px] uppercase font-bold tracking-widest text-slate-400 border-b border-slate-100 pb-1">
               PILIPINAS · REGION NCR
             </div>
-            <div className="text-2xl font-black font-mono tracking-wider py-1.5 text-slate-900">
+            <div className="text-2xl font-black font-mono tracking-wider py-1.5 text-slate-900 break-words">
               {bike.licensePlate || 'ND 8492'}
             </div>
             <div className="flex items-center justify-between text-[8px] font-bold text-slate-400 pt-1 border-t border-slate-100">
@@ -99,8 +99,8 @@ export const LtoView: React.FC<LtoViewProps> = ({
           </div>
 
           {/* Details */}
-          <div className="flex-1 space-y-2.5 w-full">
-            <div className="flex items-center gap-2">
+          <div className="flex-1 space-y-2.5 w-full min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
               <span
                 className={`text-xs font-bold uppercase px-2.5 py-1 rounded-xl flex items-center gap-1.5 ${
                   isOverdue
@@ -110,18 +110,20 @@ export const LtoView: React.FC<LtoViewProps> = ({
                     : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                 }`}
               >
-                {isOverdue && <AlertTriangle className="w-3.5 h-3.5" />}
-                {isDueThisMonth && <Clock className="w-3.5 h-3.5" />}
-                {!isOverdue && !isDueThisMonth && <CheckCircle className="w-3.5 h-3.5" />}
-                {isOverdue
-                  ? 'Registration Overdue'
-                  : isDueThisMonth
-                  ? 'Renewal Due This Month'
-                  : 'LTO Registration Up to Date'}
+                {isOverdue && <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
+                {isDueThisMonth && <Clock className="w-3.5 h-3.5 shrink-0" />}
+                {!isOverdue && !isDueThisMonth && <CheckCircle className="w-3.5 h-3.5 shrink-0" />}
+                <span>
+                  {isOverdue
+                    ? 'Registration Overdue'
+                    : isDueThisMonth
+                    ? 'Renewal Due This Month'
+                    : 'LTO Registration Up to Date'}
+                </span>
               </span>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-1 xs:grid-cols-3 gap-2 text-xs">
               <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-100">
                 <div className="text-[10px] text-slate-400 uppercase font-bold">Month (Last: {renewalInfo.lastDigit})</div>
                 <div className="font-extrabold text-slate-800 mt-0.5">{renewalInfo.renewalMonthName}</div>

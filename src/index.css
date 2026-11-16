@@ -2,6 +2,10 @@
 @import "leaflet/dist/leaflet.css";
 @custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
+  --breakpoint-xs: 375px;
+}
+
 @layer base {
   :root {
     --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
@@ -10,11 +14,18 @@
     --moto-orange: #FF6B00;
   }
 
+  html,
+  body {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
   body {
     font-family: var(--font-body);
     background-color: #F8F9FA;
     color: #1E293B;
     transition: background-color 0.2s ease, color 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
   }
 
   html.dark body {
@@ -31,6 +42,14 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 /* Global Dark Mode Surface, Card & Typography Adaptation */

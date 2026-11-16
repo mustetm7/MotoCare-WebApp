@@ -436,23 +436,25 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   // ============================================================================
   if (!isVerifiedAdmin) {
     return (
-      <div className="min-h-screen bg-[#070B12] text-white flex flex-col justify-center items-center p-4 selection:bg-[#FF6B00] selection:text-white">
-        <div className="w-full max-w-md bg-[#0E1525] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center shadow-lg shadow-orange-500/20">
-                <Lock className="w-6 h-6 text-slate-950" />
+      <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070B12] text-white flex flex-col justify-center items-center p-3.5 sm:p-4 selection:bg-[#FF6B00] selection:text-white">
+        <div className="w-full max-w-md bg-[#0E1525] border border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl space-y-5 sm:space-y-6">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center shadow-lg shadow-orange-500/20 shrink-0">
+                <Lock className="w-5 h-5 sm:w-6 sm:h-6 text-slate-950" />
               </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              <div className="min-w-0">
+                <span className="inline-block text-[10px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
                   Zero-Trust RBAC
                 </span>
-                <h1 className="text-xl font-black text-white mt-1">MotoCare Admin Portal</h1>
+                <h1 className="text-lg sm:text-xl font-black text-white mt-1 truncate">
+                  MotoCare Admin Portal
+                </h1>
               </div>
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800/80 text-xs text-slate-300 space-y-1.5">
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/90 border border-slate-800/80 text-xs text-slate-300 space-y-1.5">
             <p className="font-bold text-amber-300 flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4 shrink-0" />
               <span>Zero Trust Administrator Authentication</span>
@@ -463,25 +465,26 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           </div>
 
           {user && !isVerifiedAdmin && (
-            <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 space-y-2">
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 space-y-2">
               <div className="font-bold text-red-200">Unauthorized Account</div>
-              <p>
-                You are currently signed in as <span className="font-mono font-bold text-white">{user.email}</span>.
+              <p className="leading-relaxed">
+                You are currently signed in as{' '}
+                <span className="font-mono font-bold text-white break-all">{user.email}</span>.
                 Administrator access only.
               </p>
               <button
                 type="button"
                 onClick={signOut}
-                className="px-3 py-1.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-200 font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="w-full xs:w-auto justify-center px-3 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-200 font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                <LogOut className="w-3.5 h-3.5" />
-                Sign Out & Switch Account
+                <LogOut className="w-3.5 h-3.5 shrink-0" />
+                <span>Sign Out &amp; Switch Account</span>
               </button>
             </div>
           )}
 
           {authError && (
-            <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-semibold">
+            <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-semibold break-words">
               {authError}
             </div>
           )}
@@ -489,9 +492,9 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           <button
             type="button"
             onClick={handleGoogleAdminLogin}
-            className="w-full py-3.5 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-extrabold text-sm shadow-lg transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+            className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-extrabold text-xs sm:text-sm shadow-lg transition-all flex items-center justify-center gap-2.5 cursor-pointer"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
               <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
               <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
@@ -500,13 +503,13 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             <span>Sign in with Google as Administrator</span>
           </button>
 
-          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-500">
+          <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
             <button
               type="button"
               onClick={onReturnToApp}
               className="hover:text-slate-300 flex items-center gap-1.5 font-semibold transition-colors cursor-pointer"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
               <span>Return to MotoCare App</span>
             </button>
             <span className="font-mono text-[10px]">Firestore RBAC v2</span>
@@ -520,48 +523,48 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
   // VERIFIED ADMIN DASHBOARD
   // ============================================================================
   return (
-    <div className="min-h-screen bg-[#070B12] text-white pb-16">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#070B12] text-white pb-16">
       {/* Top Admin Navbar */}
       <header className="sticky top-0 z-30 bg-[#0B111E]/90 backdrop-blur-xl border-b border-slate-800/80">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center shadow-md shadow-orange-500/20">
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 min-h-16 py-2.5 sm:py-0 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center shadow-md shadow-orange-500/20 shrink-0">
               <ShieldCheck className="w-5 h-5 text-slate-950" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-black text-base sm:text-lg tracking-tight text-white">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-black text-sm xs:text-base sm:text-lg tracking-tight text-white truncate">
                   Moto<span className="text-[#FF6B00]">Care</span> Admin Console
                 </span>
                 <span className="hidden sm:inline-block text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                   Owner Portal
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[10px] sm:text-[11px] text-slate-400 leading-tight truncate max-w-[230px] xs:max-w-[300px] sm:max-w-none">
                 Administrator access only • 1-Month Rolling Subscriptions (Asia/Manila)
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto justify-end">
             <button
               type="button"
               onClick={handleRefreshAdminConsole}
               disabled={loadingUsers}
-              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Refresh Users and Payment Submissions (limit 100)"
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${loadingUsers ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 shrink-0 ${loadingUsers ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">{loadingUsers ? 'Refreshing...' : 'Refresh'}</span>
             </button>
             <button
               type="button"
               onClick={() => handleRunBikeCountReconciliation(true)}
               disabled={reconciling}
-              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Audit /users.bikeCount against /motorcycles documents"
             >
-              <Database className="w-3.5 h-3.5 text-amber-400" />
+              <Database className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span className="hidden sm:inline">
                 {reconciling ? 'Scanning...' : 'Reconcile Counters (Dry Run)'}
               </span>
@@ -569,15 +572,15 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             <button
               type="button"
               onClick={onReturnToApp}
-              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition-colors cursor-pointer"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
               <span>App View</span>
             </button>
             <button
               type="button"
               onClick={signOut}
-              className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-xs font-bold text-red-300 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 min-h-[36px] rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-xs font-bold text-red-300 transition-colors cursor-pointer"
             >
               Sign Out
             </button>
@@ -585,17 +588,17 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
+      <main className="max-w-5xl mx-auto px-3 sm:px-6 pt-4 sm:pt-6 space-y-5 sm:space-y-6">
         {actionError && (
-          <div className="p-4 rounded-2xl bg-red-500/15 border border-red-500/40 text-red-200 text-xs font-bold flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-              <span>{actionError}</span>
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-red-500/15 border border-red-500/40 text-red-200 text-xs font-bold flex flex-col xs:flex-row items-start xs:items-center justify-between gap-2.5">
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <span className="break-words">{actionError}</span>
             </div>
             <button
               type="button"
               onClick={() => setActionError(null)}
-              className="text-red-300 hover:text-white underline text-[11px]"
+              className="text-red-300 hover:text-white underline text-[11px] shrink-0 self-end xs:self-auto"
             >
               Dismiss
             </button>
@@ -604,15 +607,15 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
         {/* Bike Count Reconciliation Audit Banner */}
         {reconciliationReport && (
-          <div className="p-4 rounded-2xl bg-slate-900/95 border border-amber-500/40 text-xs space-y-3">
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900/95 border border-amber-500/40 text-xs space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Database className="w-4 h-4 text-amber-400" />
-                <span className="font-black text-white text-sm">
+              <div className="flex items-center gap-2 min-w-0">
+                <Database className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="font-black text-white text-xs sm:text-sm">
                   Bike Counter Reconciliation Report ({reconciliationReport.dryRun ? 'DRY RUN' : 'APPLIED'})
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {reconciliationReport.dryRun && reconciliationReport.discrepanciesFound > 0 && (
                   <button
                     type="button"
@@ -620,8 +623,8 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                     disabled={reconciling}
                     className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs flex items-center gap-1.5 cursor-pointer"
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Apply {reconciliationReport.discrepanciesFound} Counter Fix(es)
+                    <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                    <span>Apply {reconciliationReport.discrepanciesFound} Counter Fix(es)</span>
                   </button>
                 )}
                 <button
@@ -633,7 +636,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                 </button>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div className="grid grid-cols-1 xs:grid-cols-3 gap-2 text-[11px]">
               <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800">
                 <span className="text-slate-400 block">Users Scanned</span>
                 <span className="text-base font-black text-white">{reconciliationReport.totalUsersScanned}</span>
@@ -651,11 +654,11 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         )}
 
         {/* KPI Summary Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-          <div className="p-4 rounded-2xl bg-[#0E1525] border border-slate-800/90">
-            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold">
-              <span>Registered Users</span>
-              <Smartphone className="w-4 h-4 text-cyan-400" />
+        <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-[#0E1525] border border-slate-800/90 min-w-0">
+            <div className="flex items-center justify-between text-slate-400 text-xs font-semibold gap-2">
+              <span className="truncate">Registered Users</span>
+              <Smartphone className="w-4 h-4 text-cyan-400 shrink-0" />
             </div>
             <div className="text-2xl sm:text-3xl font-black text-white mt-1.5 font-mono">
               {firestoreUsers.length}
@@ -665,10 +668,10 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30">
-            <div className="flex items-center justify-between text-amber-300 text-xs font-semibold">
-              <span>Pending Approval</span>
-              <Clock className="w-4 h-4 text-amber-400" />
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 min-w-0">
+            <div className="flex items-center justify-between text-amber-300 text-xs font-semibold gap-2">
+              <span className="truncate">Pending Approval</span>
+              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
             </div>
             <div className="text-2xl sm:text-3xl font-black text-amber-300 mt-1.5 font-mono">
               {pendingCount}
@@ -678,10 +681,10 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30">
-            <div className="flex items-center justify-between text-emerald-300 text-xs font-semibold">
-              <span>Active Pro Users</span>
-              <Crown className="w-4 h-4 text-emerald-400" />
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 min-w-0">
+            <div className="flex items-center justify-between text-emerald-300 text-xs font-semibold gap-2">
+              <span className="truncate">Active Pro Users</span>
+              <Crown className="w-4 h-4 text-emerald-400 shrink-0" />
             </div>
             <div className="text-2xl sm:text-3xl font-black text-emerald-300 mt-1.5 font-mono">
               {activeProSubscribersCount}
@@ -691,10 +694,10 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-[#FF6B00]/10 border border-[#FF6B00]/30">
-            <div className="flex items-center justify-between text-orange-300 text-xs font-semibold">
-              <span>Verified Revenue</span>
-              <DollarSign className="w-4 h-4 text-[#FF6B00]" />
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-[#FF6B00]/10 border border-[#FF6B00]/30 min-w-0">
+            <div className="flex items-center justify-between text-orange-300 text-xs font-semibold gap-2">
+              <span className="truncate">Verified Revenue</span>
+              <DollarSign className="w-4 h-4 text-[#FF6B00] shrink-0" />
             </div>
             <div className="text-2xl sm:text-3xl font-black text-white mt-1.5 font-mono">
               ₱{totalRevenuePhp.toLocaleString()}
@@ -707,8 +710,8 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
         </div>
 
         {/* Search & Filter Bar */}
-        <div className="bg-[#0E1525] border border-slate-800 rounded-2xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          <div className="relative flex-1">
+        <div className="bg-[#0E1525] border border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="relative flex-1 min-w-0">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -723,7 +726,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             />
           </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 sm:pb-0 -mx-1 px-1">
             {[
               { id: 'all', label: `All (${submissions.length})` },
               { id: 'pending_approval', label: `Pending (${pendingCount})` },
@@ -735,7 +738,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                 key={tab.id}
                 type="button"
                 onClick={() => setStatusFilter(tab.id as any)}
-                className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                className={`px-3 py-2 min-h-[36px] rounded-xl text-xs font-bold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
                   statusFilter === tab.id
                     ? 'bg-[#FF6B00] text-slate-950 font-black shadow-md shadow-orange-500/20'
                     : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
@@ -769,7 +772,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
             </div>
 
             {filteredUsers.length === 0 ? (
-              <div className="p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
+              <div className="p-8 sm:p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
                 <p className="text-sm font-bold text-slate-300">No registered users match your search</p>
                 <p className="text-xs text-slate-500">
                   {hasMoreUsers
@@ -802,48 +805,50 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                 return (
                   <div
                     key={uid}
-                    className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                    className={`p-3.5 sm:p-5 rounded-2xl border transition-all overflow-hidden ${
                       isActivePro
                         ? 'bg-[#0E1525] border-emerald-500/30'
                         : 'bg-[#0E1525]/90 border-slate-800'
                     }`}
                   >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="space-y-1.5">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-extrabold text-sm sm:text-base text-white">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 sm:gap-4">
+                      <div className="space-y-1.5 min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                          <span className="font-extrabold text-sm sm:text-base text-white break-words">
                             {displayName}
                           </span>
-                          <span className="text-xs text-slate-400 font-mono">{email}</span>
+                          <span className="text-xs text-slate-400 font-mono break-all sm:break-normal">
+                            {email}
+                          </span>
 
                           {isActivePro ? (
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 shrink-0">
                               <Crown className="w-3 h-3" />
                               Pro
                             </span>
                           ) : (
-                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
                               Free
                             </span>
                           )}
 
                           {isExpired && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500/15 text-red-300 border border-red-500/30">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500/15 text-red-300 border border-red-500/30 shrink-0">
                               Expired
                             </span>
                           )}
                           {isRevoked && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500/15 text-red-300 border border-red-500/30">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500/15 text-red-300 border border-red-500/30 shrink-0">
                               Revoked
                             </span>
                           )}
                           {u.paymentStatus === 'manual_grant' && isActivePro && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shrink-0">
                               Manual Grant (Unpaid)
                             </span>
                           )}
                           {u.grantPaid === true && isActivePro && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0">
                               Manual Grant (Paid)
                             </span>
                           )}
@@ -851,12 +856,12 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
                         <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-bold bg-slate-800 text-slate-200 border border-slate-700">
-                            <Bike className="w-3 h-3 text-[#FF6B00]" />
-                            Bikes: {bikeCount}
+                            <Bike className="w-3 h-3 text-[#FF6B00] shrink-0" />
+                            <span>Bikes: {bikeCount}</span>
                           </span>
 
                           <span
-                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-bold ${
+                            className={`inline-flex flex-wrap items-center gap-1 px-2.5 py-0.5 rounded-md font-mono font-bold ${
                               validExpiry
                                 ? isActivePro
                                   ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
@@ -864,21 +869,23 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                                 : 'bg-slate-900 text-slate-400 border border-slate-800'
                             }`}
                           >
-                            <Calendar className="w-3 h-3" />
-                            Expiry (Manila):{' '}
-                            {validExpiry
-                              ? `${formatManilaDateTime(validExpiry)}${
-                                  isActivePro ? ` (${daysLeft}d left)` : ' (EXPIRED)'
-                                }`
-                              : isRevoked
-                              ? 'Revoked'
-                              : '—'}
+                            <Calendar className="w-3 h-3 shrink-0" />
+                            <span>
+                              Expiry (Manila):{' '}
+                              {validExpiry
+                                ? `${formatManilaDateTime(validExpiry)}${
+                                    isActivePro ? ` (${daysLeft}d left)` : ' (EXPIRED)'
+                                  }`
+                                : isRevoked
+                                ? 'Revoked'
+                                : '—'}
+                            </span>
                           </span>
                         </div>
 
                         {u.grantedBy && u.grantedAt && (
-                          <div className="text-[11px] text-slate-400 pt-0.5">
-                            Granted by <span className="font-mono text-slate-300">{u.grantedBy}</span> on{' '}
+                          <div className="text-[11px] text-slate-400 pt-0.5 break-words">
+                            Granted by <span className="font-mono text-slate-300 break-all">{u.grantedBy}</span> on{' '}
                             <span className="font-mono text-slate-300">
                               {formatManilaDateTime(u.grantedAt)}
                             </span>
@@ -889,15 +896,15 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                       </div>
 
                       {/* User Row Actions */}
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="w-full sm:w-auto flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/80">
                         {!isActivePro && (
                           <button
                             type="button"
                             disabled={isBusy}
                             onClick={() => handleOpenGrantProModal(u)}
-                            className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-md shadow-orange-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                            className="w-full sm:w-auto justify-center min-h-[40px] px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-md shadow-orange-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
                           >
-                            <Crown className="w-3.5 h-3.5" />
+                            <Crown className="w-3.5 h-3.5 shrink-0" />
                             <span>Grant Pro</span>
                           </button>
                         )}
@@ -907,10 +914,10 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                             type="button"
                             disabled={isBusy}
                             onClick={() => handleRevokeUserProDirect(u)}
-                            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                            className="w-full sm:w-auto justify-center min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                             title="Immediately revoke this user's Pro subscription"
                           >
-                            <XCircle className="w-3.5 h-3.5" />
+                            <XCircle className="w-3.5 h-3.5 shrink-0" />
                             <span>{isBusy ? 'Revoking...' : 'Revoke User Pro'}</span>
                           </button>
                         )}
@@ -929,7 +936,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                   data-testid="admin-load-more-users-btn"
                   disabled={loadingUsers || loadingMoreUsers}
                   onClick={() => loadUsersOnDemand(false)}
-                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+                  className="w-full xs:w-auto px-5 py-2.5 min-h-[40px] rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
                 >
                   {loadingMoreUsers || loadingUsers
                     ? 'Loading more users...'
@@ -943,7 +950,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           <>
             <div className="space-y-3">
               {filteredSubmissions.length === 0 ? (
-                <div className="p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
+                <div className="p-8 sm:p-12 rounded-3xl bg-[#0E1525] border border-slate-800 text-center space-y-2">
                   <p className="text-sm font-bold text-slate-300">No payment submissions match your filter</p>
                   <p className="text-xs text-slate-500">
                     When riders submit a GCash reference number from the app, it will appear here in real time.
@@ -970,7 +977,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                   return (
                     <div
                       key={record.id}
-                      className={`p-4 sm:p-5 rounded-2xl border transition-all ${
+                      className={`p-3.5 sm:p-5 rounded-2xl border transition-all overflow-hidden ${
                         isPending
                           ? 'bg-gradient-to-r from-amber-500/10 via-[#0E1525] to-[#0E1525] border-amber-500/40 shadow-lg shadow-amber-500/5'
                           : isPro
@@ -978,37 +985,39 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                           : 'bg-[#0E1525]/90 border-slate-800'
                       }`}
                     >
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="space-y-1.5">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-extrabold text-sm sm:text-base text-white">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 sm:gap-4">
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                            <span className="font-extrabold text-sm sm:text-base text-white break-words">
                               {record.userName}
                             </span>
-                            <span className="text-xs text-slate-400 font-mono">{record.userEmail}</span>
+                            <span className="text-xs text-slate-400 font-mono break-all sm:break-normal">
+                              {record.userEmail}
+                            </span>
 
                             {isPending && (
-                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 shrink-0">
                                 <Clock className="w-3 h-3" />
                                 Pending Verification
                               </span>
                             )}
                             {isPro && (
-                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 shrink-0">
                                 <CheckCircle2 className="w-3 h-3" />
                                 Approved (+1 Month)
                               </span>
                             )}
                             {isRejected && (
-                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1 shrink-0">
                                 <XCircle className="w-3 h-3" />
                                 Rejected
                               </span>
                             )}
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-300">
-                            <span className="flex items-center gap-1.5 text-slate-400">
-                              <Bike className="w-3.5 h-3.5 text-[#FF6B00]" />
+                          <div className="flex flex-wrap items-center gap-x-3 sm:gap-x-4 gap-y-1.5 text-xs text-slate-300">
+                            <span className="flex flex-wrap items-center gap-1.5 text-slate-400">
+                              <Bike className="w-3.5 h-3.5 text-[#FF6B00] shrink-0" />
                               <strong className="text-slate-200">{record.bikeModel}</strong>
                               {record.bikePlate && (
                                 <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
@@ -1027,7 +1036,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                             )}
 
                             {record.referenceNumber && (
-                              <span className="font-mono text-xs bg-slate-900 px-2.5 py-0.5 rounded-lg border border-slate-700 text-amber-300 font-bold">
+                              <span className="font-mono text-xs bg-slate-900 px-2.5 py-0.5 rounded-lg border border-slate-700 text-amber-300 font-bold break-all sm:break-normal">
                                 Ref: {record.referenceNumber}
                               </span>
                             )}
@@ -1042,16 +1051,18 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                           {userExpiryDate && (
                             <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
                               <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold ${
+                                className={`inline-flex flex-wrap items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold ${
                                   isUserExpired
                                     ? 'bg-red-500/15 text-red-300 border border-red-500/30'
                                     : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
                                 }`}
                               >
-                                <Calendar className="w-3 h-3" />
-                                Expires: {formatManilaDateTime(userExpiryDate)}
-                                {!isUserExpired && ` (${userDaysLeft}d remaining)`}
-                                {isUserExpired && ' (EXPIRED)'}
+                                <Calendar className="w-3 h-3 shrink-0" />
+                                <span>
+                                  Expires: {formatManilaDateTime(userExpiryDate)}
+                                  {!isUserExpired && ` (${userDaysLeft}d remaining)`}
+                                  {isUserExpired && ' (EXPIRED)'}
+                                </span>
                               </span>
                               {typeof linkedUser?.bikeCount === 'number' && (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono font-bold bg-slate-800 text-slate-300">
@@ -1061,7 +1072,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                             </div>
                           )}
 
-                          <div className="text-[11px] text-slate-500">
+                          <div className="text-[11px] text-slate-500 break-words">
                             Submitted: {formatManilaDateTime(record.submittedAt)}
                             {record.reviewedAt &&
                               ` • Reviewed: ${formatManilaDateTime(record.reviewedAt)}`}
@@ -1069,15 +1080,15 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                         </div>
 
                         {/* Admin Action Buttons */}
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="w-full sm:w-auto flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800/80">
                           {isPending && (
                             <button
                               type="button"
                               disabled={isBusy}
                               onClick={() => handleApproveSubmission(record)}
-                              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                              className="flex-1 sm:flex-initial justify-center min-h-[40px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
                             >
-                              <CheckCircle2 className="w-4 h-4" />
+                              <CheckCircle2 className="w-4 h-4 shrink-0" />
                               <span>{isBusy ? 'Approving...' : 'Approve (+1 Month)'}</span>
                             </button>
                           )}
@@ -1087,9 +1098,9 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                               type="button"
                               disabled={isBusy}
                               onClick={() => handleRejectSubmission(record)}
-                              className="px-3.5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 border border-red-500/30 text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                              className="flex-1 sm:flex-initial justify-center min-h-[40px] px-3.5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 disabled:opacity-50 border border-red-500/30 text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                             >
-                              <XCircle className="w-4 h-4" />
+                              <XCircle className="w-4 h-4 shrink-0" />
                               <span>Reject</span>
                             </button>
                           )}
@@ -1099,10 +1110,10 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                               type="button"
                               disabled={isBusy}
                               onClick={() => handleRejectSubmission(record)}
-                              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                              className="w-full sm:w-auto justify-center min-h-[40px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-red-500/20 border border-slate-700 hover:border-red-500/30 text-slate-300 hover:text-red-300 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                               title="Immediately revoke this user's Pro subscription"
                             >
-                              <XCircle className="w-3.5 h-3.5" />
+                              <XCircle className="w-3.5 h-3.5 shrink-0" />
                               <span>Revoke User Pro</span>
                             </button>
                           )}
@@ -1121,7 +1132,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                   type="button"
                   disabled={loadingUsers}
                   onClick={() => loadUsersOnDemand(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
+                  className="w-full xs:w-auto px-4 py-2 min-h-[40px] rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition-colors cursor-pointer"
                 >
                   {loadingUsers ? 'Loading...' : 'Load More Users (Next 100)'}
                 </button>
@@ -1132,16 +1143,16 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
         {/* Manual Grant Pro Modal */}
         {grantTargetUser && (
-          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="w-full max-w-md rounded-3xl bg-[#0E1525] border border-slate-700 p-6 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center">
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3.5 sm:p-4">
+            <div className="w-full max-w-md max-h-[92vh] overflow-y-auto rounded-3xl bg-[#0E1525] border border-slate-700 p-4 sm:p-6 shadow-2xl space-y-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#FF6B00] to-amber-500 flex items-center justify-center shrink-0">
                     <Crown className="w-5 h-5 text-slate-950" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="text-base font-black text-white">Grant Pro Access</h3>
-                    <p className="text-xs text-slate-400 font-mono">
+                    <p className="text-xs text-slate-400 font-mono truncate">
                       {grantTargetUser.email || grantTargetUser.displayName || grantTargetUser.id}
                     </p>
                   </div>
@@ -1149,7 +1160,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                 <button
                   type="button"
                   onClick={() => setGrantTargetUser(null)}
-                  className="text-xs text-slate-400 hover:text-white font-bold"
+                  className="text-xs text-slate-400 hover:text-white font-bold shrink-0 px-2 py-1"
                 >
                   Cancel
                 </button>
@@ -1192,9 +1203,9 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                     type="checkbox"
                     checked={grantMarkAsPaid}
                     onChange={(e) => setGrantMarkAsPaid(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-600 text-[#FF6B00] focus:ring-[#FF6B00]"
+                    className="mt-0.5 rounded border-slate-600 text-[#FF6B00] focus:ring-[#FF6B00] shrink-0"
                   />
-                  <div className="text-xs">
+                  <div className="text-xs min-w-0">
                     <span className="font-bold text-white block">
                       Mark as paid (+₱{(Math.max(1, grantMonths || 1) * 49).toLocaleString()} to Verified Revenue)
                     </span>
@@ -1205,24 +1216,24 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                 </label>
 
                 {grantModalError && (
-                  <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-bold">
+                  <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-bold break-words">
                     {grantModalError}
                   </div>
                 )}
 
-                <div className="flex items-center justify-end gap-2 pt-2">
+                <div className="flex flex-col-reverse xs:flex-row items-stretch xs:items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
                     disabled={grantSubmitting}
                     onClick={() => setGrantTargetUser(null)}
-                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 cursor-pointer"
+                    className="px-4 py-2.5 min-h-[40px] rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={grantSubmitting}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-orange-500/20 cursor-pointer"
+                    className="px-4 py-2.5 min-h-[40px] rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50 text-slate-950 font-black text-xs shadow-lg shadow-orange-500/20 cursor-pointer"
                   >
                     {grantSubmitting ? 'Granting Pro...' : `Confirm Grant (${grantMonths} Mo)`}
                   </button>
@@ -1241,12 +1252,12 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
           return (
             <div
               data-testid="admin-cloud-sync-diagnostic-panel"
-              className="p-4 sm:p-5 rounded-2xl bg-[#0E1525] border border-slate-800 space-y-4"
+              className="p-3.5 sm:p-5 rounded-2xl bg-[#0E1525] border border-slate-800 space-y-4 overflow-hidden"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-cyan-400" />
-                  <h3 className="text-sm font-extrabold text-white">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Database className="w-4 h-4 text-cyan-400 shrink-0" />
+                  <h3 className="text-xs sm:text-sm font-extrabold text-white">
                     Cloud Sync Diagnostics &amp; Write Queue
                   </h3>
                 </div>
@@ -1261,11 +1272,11 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                 <div
                   data-testid="sync-logs-successful-column"
-                  className="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/20 space-y-2"
+                  className="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/20 space-y-2 min-w-0 overflow-hidden"
                 >
-                  <div className="flex items-center justify-between font-bold text-emerald-400">
-                    <span>Last 5 Successful Syncs</span>
-                    <span className="font-mono text-[11px]">
+                  <div className="flex items-center justify-between font-bold text-emerald-400 gap-2">
+                    <span className="truncate">Last 5 Successful Syncs</span>
+                    <span className="font-mono text-[11px] shrink-0">
                       {syncLogs.last5Successful.length} / 5
                     </span>
                   </div>
@@ -1284,11 +1295,11 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
                 <div
                   data-testid="sync-logs-failed-column"
-                  className="p-3 rounded-xl bg-slate-900/90 border border-red-500/20 space-y-2"
+                  className="p-3 rounded-xl bg-slate-900/90 border border-red-500/20 space-y-2 min-w-0 overflow-hidden"
                 >
-                  <div className="flex items-center justify-between font-bold text-red-400">
-                    <span>Last 5 Failed Syncs</span>
-                    <span className="font-mono text-[11px]">
+                  <div className="flex items-center justify-between font-bold text-red-400 gap-2">
+                    <span className="truncate">Last 5 Failed Syncs</span>
+                    <span className="font-mono text-[11px] shrink-0">
                       {syncLogs.last5Failed.length} / 5
                     </span>
                   </div>
@@ -1308,11 +1319,11 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
 
               <div
                 data-testid="quarantined-mutations-section"
-                className="p-3 rounded-xl bg-slate-900/90 border border-amber-500/25 space-y-2 text-xs"
+                className="p-3 rounded-xl bg-slate-900/90 border border-amber-500/25 space-y-2 text-xs min-w-0 overflow-hidden"
               >
-                <div className="flex items-center justify-between font-bold text-amber-300">
-                  <span>Quarantined Offline Mutations</span>
-                  <span className="font-mono text-[11px]">{quarantinedQueue.length} item(s)</span>
+                <div className="flex items-center justify-between font-bold text-amber-300 gap-2">
+                  <span className="truncate">Quarantined Offline Mutations</span>
+                  <span className="font-mono text-[11px] shrink-0">{quarantinedQueue.length} item(s)</span>
                 </div>
                 {quarantinedQueue.length === 0 ? (
                   <p className="text-[11px] text-slate-500">No quarantined mutations.</p>
@@ -1321,7 +1332,7 @@ export const AdminUsersPortal: React.FC<AdminUsersPortalProps> = ({
                     {quarantinedQueue.map((q) => (
                       <li
                         key={q.id}
-                        className="p-2 rounded-lg bg-slate-950 border border-slate-800 space-y-0.5"
+                        className="p-2 rounded-lg bg-slate-950 border border-slate-800 space-y-0.5 break-words"
                       >
                         <div>
                           [{q.failureClassification}] {q.entity}:{q.targetId} ({q.action})

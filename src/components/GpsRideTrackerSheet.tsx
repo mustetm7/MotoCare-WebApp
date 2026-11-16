@@ -8,6 +8,7 @@ interface GpsRideTrackerSheetProps {
   bike: Motorcycle;
   subscription: UserSubscription;
   hasProAccess?: boolean;
+  isOpen?: boolean;
   onFinishRide: (distanceKm: number) => void;
   onClose?: () => void;
   onOpenPaywall?: () => void;
@@ -72,6 +73,7 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
   bike,
   subscription,
   hasProAccess,
+  isOpen = true,
   onFinishRide,
   onClose,
   onOpenPaywall,
@@ -115,6 +117,27 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
   isPausedRef.current = isPaused;
   autoPauseEnabledRef.current = autoPauseEnabled;
   isSimulatingRef.current = isSimulating;
+
+  // Support Escape key dismissal on desktop & prevent accidental background scroll while open
+  React.useEffect(() => {
+    if (!isOpen) return;
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose?.();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   const triggerResumingIndicator = React.useCallback(() => {
     setIsResuming(true);
@@ -481,293 +504,361 @@ export const GpsRideTrackerSheet: React.FC<GpsRideTrackerSheetProps> = ({
     }
     sounds.playSuccess();
     onFinishRide(roundedAddedKm);
+    // Reset session state after finishing & committing mileage to odometer
+    stationarySecondsRef.current = 0;
+    setStationarySeconds(0);
+    isAutoPausedRef.current = false;
+    setIsAutoPaused(false);
+    isPausedRef.current = false;
+    setIsPaused(false);
+    setIsResuming(false);
+    currentSpeedRef.current = 0;
+    setCurrentSpeed(0);
+    setTopSpeed(0);
+    setDistanceKm(0);
+    setElapsedSeconds(8);
+    lastCoordsRef.current = null;
+    lastFixTimestampRef.current = null;
+    lastMoveTimestampRef.current = null;
     onClose?.();
   };
 
+  // When closed, keep component mounted so active GPS session, distance, and timer persist in background
+  if (!isOpen) {
+    return null;
+  }
+
   if (!isPro) {
     return (
-      <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 p-6 text-center space-y-4">
-        <h3 className="text-lg font-extrabold text-slate-900">
-          Zero-Touch GPS Auto-Odometer is a Pro Feature
-        </h3>
-        <p className="text-xs text-slate-500">
-          Upgrade to MotoCare Pro (₱49/mo) to unlock live GPS ride tracking and automatic odometer updates.
-        </p>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-2xl"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onClose?.();
-              onOpenPaywall?.();
-            }}
-            className="flex-1 py-2.5 text-xs font-bold text-white bg-[#FF6B00] rounded-2xl"
-          >
-            Upgrade to Pro (₱49/mo)
-          </button>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Live GPS Ride Tracker Pro Upgrade"
+        data-testid="gps-ride-tracker-modal-overlay"
+        onClick={() => onClose?.()}
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+      >
+        <div
+          id="gps-ride-tracker-modal"
+          data-testid="gps-ride-tracker-modal-card"
+          onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-0 inset-x-0 w-full max-w-full sm:bottom-auto sm:inset-x-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[calc(100%-2rem)] sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-100 p-5 sm:p-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pb-6 text-center space-y-4 max-h-[92vh] overflow-y-auto"
+        >
+          <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto sm:hidden" aria-hidden="true" />
+          {onClose && (
+            <button
+              type="button"
+              data-testid="gps-modal-close-btn"
+              onClick={onClose}
+              title="Close GPS Ride Tracker"
+              aria-label="Close GPS Ride Tracker"
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+          <h3 className="text-base sm:text-lg font-extrabold text-slate-900 pr-6">
+            Zero-Touch GPS Auto-Odometer is a Pro Feature
+          </h3>
+          <p className="text-xs text-slate-500">
+            Upgrade to MotoCare Pro (₱49/mo) to unlock live GPS ride tracking and automatic odometer updates.
+          </p>
+          <div className="flex flex-col-reverse xs:flex-row gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-2xl cursor-pointer min-h-[42px]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onClose?.();
+                onOpenPaywall?.();
+              }}
+              className="flex-1 py-2.5 text-xs font-bold text-white bg-[#FF6B00] rounded-2xl cursor-pointer min-h-[42px]"
+            >
+              Upgrade to Pro (₱49/mo)
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-md mx-auto bg-white rounded-3xl shadow-xl border border-slate-100 p-5 space-y-4 animate-in fade-in duration-200 max-h-[92vh] overflow-y-auto">
-      {/* Top Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {isAutoPaused ? (
-            <div
-              data-testid="gps-auto-paused-badge"
-              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold"
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Live GPS Ride Tracker"
+      data-testid="gps-ride-tracker-modal-overlay"
+      onClick={() => onClose?.()}
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+    >
+      <div
+        id="gps-ride-tracker-modal"
+        data-testid="gps-ride-tracker-modal-card"
+        onClick={(e) => e.stopPropagation()}
+        className="absolute bottom-0 inset-x-0 w-full max-w-full sm:bottom-auto sm:inset-x-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[calc(100%-2rem)] sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-100 p-4 sm:p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:pb-5 space-y-3.5 sm:space-y-4 max-h-[92vh] overflow-y-auto"
+      >
+        {/* Mobile Bottom-Sheet Handle */}
+        <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto sm:hidden" aria-hidden="true" />
+
+        {/* Top Header */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            {isAutoPaused ? (
+              <div
+                data-testid="gps-auto-paused-badge"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-[11px] sm:text-xs font-bold truncate"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                <span className="tracking-wide truncate">{trackingStatusLabel}</span>
+              </div>
+            ) : isPaused ? (
+              <div
+                data-testid="gps-manual-paused-badge"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 text-[11px] sm:text-xs font-bold truncate"
+              >
+                <span className="w-2 h-2 rounded-full bg-slate-500 shrink-0" />
+                <span className="tracking-wide truncate">{trackingStatusLabel}</span>
+              </div>
+            ) : isResuming ? (
+              <div
+                data-testid="gps-resuming-badge"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-300 text-cyan-800 text-[11px] sm:text-xs font-bold truncate"
+              >
+                <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse shrink-0" />
+                <span className="tracking-wide truncate">{trackingStatusLabel}</span>
+              </div>
+            ) : (
+              <div
+                data-testid="gps-active-tracking-badge"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-xl bg-[#E8FAF0] border border-emerald-300 text-emerald-700 text-[11px] sm:text-xs font-bold truncate"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span className="tracking-wide truncate">{trackingStatusLabel}</span>
+              </div>
+            )}
+          </div>
+
+          {onClose && (
+            <button
+              type="button"
+              data-testid="gps-modal-close-btn"
+              onClick={onClose}
+              title="Close GPS Ride Tracker"
+              aria-label="Close GPS Ride Tracker"
+              className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
             >
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-              <span className="tracking-wide">{trackingStatusLabel}</span>
-            </div>
-          ) : isPaused ? (
-            <div
-              data-testid="gps-manual-paused-badge"
-              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 text-xs font-bold"
-            >
-              <span className="w-2 h-2 rounded-full bg-slate-500" />
-              <span className="tracking-wide">{trackingStatusLabel}</span>
-            </div>
-          ) : isResuming ? (
-            <div
-              data-testid="gps-resuming-badge"
-              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-300 text-cyan-800 text-xs font-bold"
-            >
-              <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
-              <span className="tracking-wide">{trackingStatusLabel}</span>
-            </div>
-          ) : (
-            <div
-              data-testid="gps-active-tracking-badge"
-              className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#E8FAF0] border border-emerald-300 text-emerald-700 text-xs font-bold"
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="tracking-wide">{trackingStatusLabel}</span>
-            </div>
+              <X className="w-5 h-5" />
+            </button>
           )}
         </div>
 
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            title="Close GPS Ride Tracker"
-            aria-label="Close GPS Ride Tracker"
-            className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl hover:bg-slate-100 transition-colors"
+        {/* Stationary Auto-Pause Notification Indicator Banner */}
+        {isAutoPaused && (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="gps-auto-pause-banner"
+            className="p-3 sm:p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium flex flex-col xs:flex-row xs:items-center justify-between gap-2.5 shadow-xs"
           >
-            <X className="w-5 h-5" />
-          </button>
-        )}
-      </div>
-
-      {/* Stationary Auto-Pause Notification Indicator Banner */}
-      {isAutoPaused && (
-        <div
-          role="status"
-          aria-live="polite"
-          data-testid="gps-auto-pause-banner"
-          className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium flex items-center justify-between gap-2.5 shadow-xs"
-        >
-          <div className="space-y-0.5">
-            <div className="font-extrabold text-amber-950 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
-              <span>Paused - Motorcycle Stationary</span>
+            <div className="space-y-0.5 min-w-0">
+              <div className="font-extrabold text-amber-950 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping shrink-0" />
+                <span>Paused - Motorcycle Stationary</span>
+              </div>
+              <p className="text-[11px] text-amber-800 leading-snug">
+                No significant GPS movement detected for {Math.max(60, stationarySeconds)} consecutive seconds (1 minute). Timer and distance calculation are paused until you start moving again.
+              </p>
             </div>
-            <p className="text-[11px] text-amber-800 leading-snug">
-              No significant GPS movement detected for {Math.max(60, stationarySeconds)} consecutive seconds (1 minute). Timer and distance calculation are paused until you start moving again.
-            </p>
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playClick();
+                stationarySecondsRef.current = 0;
+                setStationarySeconds(0);
+                isAutoPausedRef.current = false;
+                setIsAutoPaused(false);
+                setIsPaused(false);
+                triggerResumingIndicator();
+              }}
+              className="w-full xs:w-auto px-3 py-2 xs:py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0 cursor-pointer shadow-xs text-center"
+            >
+              Resume Now
+            </button>
           </div>
+        )}
+
+        {/* Tracking bike label */}
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 min-w-0">
+          <Bike className="w-4 h-4 text-[#FF6B00] shrink-0" />
+          <span className="truncate">Tracking for: {bike.year} {bike.brand} {bike.model}</span>
+        </div>
+
+        {/* Speedometer display */}
+        <div className="text-center py-0.5 sm:py-1 space-y-0.5">
+          <div className="text-[11px] font-bold tracking-widest text-slate-400 uppercase">
+            SPEED
+          </div>
+          <div className="text-5xl sm:text-6xl font-extrabold text-slate-900 tracking-tight font-mono leading-none">
+            {currentSpeed}
+          </div>
+          <div className="text-sm font-bold text-[#FF6B00]">
+            km/h
+          </div>
+        </div>
+
+        {/* 3 Metrics Row */}
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center py-2 border-y border-slate-100">
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase truncate">DISTANCE</div>
+            <div
+              data-testid="gps-accumulated-distance"
+              className="text-sm sm:text-base font-extrabold text-[#FF6B00] font-mono mt-0.5 truncate"
+            >
+              +{distanceKm.toFixed(2)} km
+            </div>
+          </div>
+
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase truncate">DURATION</div>
+            <div
+              data-testid="gps-elapsed-duration"
+              className="text-sm sm:text-base font-extrabold text-slate-900 font-mono mt-0.5 truncate"
+            >
+              {formatTime(elapsedSeconds)}
+            </div>
+          </div>
+
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase truncate">TOP SPEED</div>
+            <div className="text-sm sm:text-base font-extrabold text-[#00ACC1] font-mono mt-0.5 truncate">
+              {topSpeed} km/h
+            </div>
+          </div>
+        </div>
+
+        {/* Status Row, Auto-Pause Switch & Simulate Switch */}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-1.5 text-slate-500 font-medium min-w-0">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                isAutoPaused || isPaused
+                  ? 'bg-amber-500'
+                  : isResuming
+                  ? 'bg-cyan-500'
+                  : 'bg-emerald-500'
+              }`}
+            />
+            <span data-testid="gps-status-row-label" className="truncate">{trackingStatusLabel}</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <label
+              className="flex items-center gap-1.5 cursor-pointer text-slate-600 font-medium"
+              title="Automatically pause ride timer after 1 minute stationary"
+            >
+              <input
+                type="checkbox"
+                checked={autoPauseEnabled}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  autoPauseEnabledRef.current = enabled;
+                  setAutoPauseEnabled(enabled);
+                  if (!enabled) {
+                    isAutoPausedRef.current = false;
+                    setIsAutoPaused(false);
+                  }
+                }}
+                className="w-3.5 h-3.5 rounded border-slate-300 text-[#FF6B00] focus:ring-[#FF6B00] cursor-pointer"
+              />
+              <span>Auto-Pause (1m)</span>
+            </label>
+
+            <label className="flex items-center gap-2 cursor-pointer text-slate-600 font-medium">
+              <span>Simulate Ride</span>
+              <input
+                type="checkbox"
+                checked={isSimulating}
+                onChange={(e) => {
+                  isSimulatingRef.current = e.target.checked;
+                  setIsSimulating(e.target.checked);
+                }}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF6B00] relative"></div>
+            </label>
+          </div>
+        </div>
+
+        {/* Auto-Increment Preview Banner */}
+        <div className="p-3 sm:p-3.5 rounded-2xl bg-[#FFFDF0] border border-amber-200 flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">
+              Auto-Increment Preview
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-extrabold text-slate-900 font-mono mt-0.5">
+              <span>{bike.odometer} km</span>
+              <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span>{previewNewOdo} km</span>
+            </div>
+          </div>
+
+          <span className="px-2.5 sm:px-3 py-1 rounded-xl bg-[#FF6B00] text-white text-xs font-black font-mono shadow-sm shrink-0">
+            +{roundedAddedKm} km
+          </span>
+        </div>
+
+        {/* Bottom Action Buttons */}
+        <div className="grid grid-cols-12 gap-2 sm:gap-2.5 pt-1">
           <button
             type="button"
+            data-testid="gps-manual-pause-resume-btn"
             onClick={() => {
               sounds.playClick();
-              stationarySecondsRef.current = 0;
-              setStationarySeconds(0);
-              isAutoPausedRef.current = false;
-              setIsAutoPaused(false);
-              setIsPaused(false);
-              triggerResumingIndicator();
+              if (effectivelyPaused) {
+                const wasAutoPaused = isAutoPausedRef.current;
+                stationarySecondsRef.current = 0;
+                setStationarySeconds(0);
+                isAutoPausedRef.current = false;
+                setIsAutoPaused(false);
+                isPausedRef.current = false;
+                setIsPaused(false);
+                reanchorAfterManualPauseRef.current = true;
+                lastMoveTimestampRef.current = Date.now();
+                if (wasAutoPaused) {
+                  triggerResumingIndicator();
+                }
+              } else {
+                isPausedRef.current = true;
+                setIsPaused(true);
+                setIsResuming(false);
+              }
             }}
-            className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0 cursor-pointer shadow-xs"
+            title={effectivelyPaused ? 'Resume GPS ride tracking' : 'Pause GPS ride tracking'}
+            aria-label={effectivelyPaused ? 'Resume GPS ride tracking' : 'Pause GPS ride tracking'}
+            className="col-span-4 min-h-[44px] py-3 px-2.5 sm:px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
           >
-            Resume Now
+            {effectivelyPaused ? <Play className="w-4 h-4 fill-slate-800 shrink-0" /> : <Pause className="w-4 h-4 fill-slate-800 shrink-0" />}
+            <span>{effectivelyPaused ? 'Resume' : 'Pause'}</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="gps-finish-ride-btn"
+            onClick={handleFinish}
+            className="col-span-8 min-h-[44px] py-3 px-3 sm:px-4 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-[#FF6B00]/25 transition-all active:scale-98 cursor-pointer"
+          >
+            <span>Finish & Add to Odometer</span>
           </button>
         </div>
-      )}
-
-      {/* Tracking bike label */}
-      <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-        <Bike className="w-4 h-4 text-[#FF6B00]" />
-        <span>Tracking for: {bike.year} {bike.brand} {bike.model}</span>
-      </div>
-
-      {/* Speedometer display */}
-      <div className="text-center py-1 space-y-0.5">
-        <div className="text-[11px] font-bold tracking-widest text-slate-400 uppercase">
-          SPEED
-        </div>
-        <div className="text-6xl font-extrabold text-slate-900 tracking-tight font-mono leading-none">
-          {currentSpeed}
-        </div>
-        <div className="text-sm font-bold text-[#FF6B00]">
-          km/h
-        </div>
-      </div>
-
-      {/* 3 Metrics Row */}
-      <div className="grid grid-cols-3 gap-2 text-center py-2 border-y border-slate-100">
-        <div>
-          <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">DISTANCE</div>
-          <div
-            data-testid="gps-accumulated-distance"
-            className="text-base font-extrabold text-[#FF6B00] font-mono mt-0.5"
-          >
-            +{distanceKm.toFixed(2)} km
-          </div>
-        </div>
-
-        <div>
-          <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">DURATION</div>
-          <div
-            data-testid="gps-elapsed-duration"
-            className="text-base font-extrabold text-slate-900 font-mono mt-0.5"
-          >
-            {formatTime(elapsedSeconds)}
-          </div>
-        </div>
-
-        <div>
-          <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">TOP SPEED</div>
-          <div className="text-base font-extrabold text-[#00ACC1] font-mono mt-0.5">
-            {topSpeed} km/h
-          </div>
-        </div>
-      </div>
-
-      {/* Status Row, Auto-Pause Switch & Simulate Switch */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              isAutoPaused || isPaused
-                ? 'bg-amber-500'
-                : isResuming
-                ? 'bg-cyan-500'
-                : 'bg-emerald-500'
-            }`}
-          />
-          <span data-testid="gps-status-row-label">{trackingStatusLabel}</span>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <label
-            className="flex items-center gap-1.5 cursor-pointer text-slate-600 font-medium"
-            title="Automatically pause ride timer after 1 minute stationary"
-          >
-            <input
-              type="checkbox"
-              checked={autoPauseEnabled}
-              onChange={(e) => {
-                const enabled = e.target.checked;
-                autoPauseEnabledRef.current = enabled;
-                setAutoPauseEnabled(enabled);
-                if (!enabled) {
-                  isAutoPausedRef.current = false;
-                  setIsAutoPaused(false);
-                }
-              }}
-              className="w-3.5 h-3.5 rounded border-slate-300 text-[#FF6B00] focus:ring-[#FF6B00] cursor-pointer"
-            />
-            <span>Auto-Pause (1m)</span>
-          </label>
-
-          <label className="flex items-center gap-2 cursor-pointer text-slate-600 font-medium">
-            <span>Simulate Ride</span>
-            <input
-              type="checkbox"
-              checked={isSimulating}
-              onChange={(e) => {
-                isSimulatingRef.current = e.target.checked;
-                setIsSimulating(e.target.checked);
-              }}
-              className="sr-only peer"
-            />
-            <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF6B00] relative"></div>
-          </label>
-        </div>
-      </div>
-
-      {/* Auto-Increment Preview Banner */}
-      <div className="p-3.5 rounded-2xl bg-[#FFFDF0] border border-amber-200 flex items-center justify-between">
-        <div>
-          <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">
-            Auto-Increment Preview
-          </div>
-          <div className="flex items-center gap-2 text-sm font-extrabold text-slate-900 font-mono mt-0.5">
-            <span>{bike.odometer} km</span>
-            <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
-            <span>{previewNewOdo} km</span>
-          </div>
-        </div>
-
-        <span className="px-3 py-1 rounded-xl bg-[#FF6B00] text-white text-xs font-black font-mono shadow-sm">
-          +{roundedAddedKm} km
-        </span>
-      </div>
-
-      {/* Bottom Action Buttons */}
-      <div className="grid grid-cols-12 gap-2.5 pt-1">
-        <button
-          type="button"
-          data-testid="gps-manual-pause-resume-btn"
-          onClick={() => {
-            sounds.playClick();
-            if (effectivelyPaused) {
-              const wasAutoPaused = isAutoPausedRef.current;
-              stationarySecondsRef.current = 0;
-              setStationarySeconds(0);
-              isAutoPausedRef.current = false;
-              setIsAutoPaused(false);
-              isPausedRef.current = false;
-              setIsPaused(false);
-              reanchorAfterManualPauseRef.current = true;
-              lastMoveTimestampRef.current = Date.now();
-              if (wasAutoPaused) {
-                triggerResumingIndicator();
-              }
-            } else {
-              isPausedRef.current = true;
-              setIsPaused(true);
-              setIsResuming(false);
-            }
-          }}
-          title={effectivelyPaused ? 'Resume GPS ride tracking' : 'Pause GPS ride tracking'}
-          aria-label={effectivelyPaused ? 'Resume GPS ride tracking' : 'Pause GPS ride tracking'}
-          className="col-span-4 py-3 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-        >
-          {effectivelyPaused ? <Play className="w-4 h-4 fill-slate-800" /> : <Pause className="w-4 h-4 fill-slate-800" />}
-          <span>{effectivelyPaused ? 'Resume' : 'Pause'}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={handleFinish}
-          className="col-span-8 py-3 px-4 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-[#FF6B00]/25 transition-all active:scale-98"
-        >
-          <span>Finish & Add to Odometer</span>
-        </button>
       </div>
     </div>
   );
 };
+
 
 

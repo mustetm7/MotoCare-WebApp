@@ -57,6 +57,7 @@ import {
   executeDirectOnlineWrite,
   scheduleDirectOnlineOdometerUpdate,
   validatePaymentReferenceNumber,
+  submitQuickFeedbackToFirestore,
 } from './utils/firestoreService';
 import { OWNER_ADMIN_EMAIL } from './utils/firebase';
 import { useAuth } from './context/AuthContext';
@@ -597,7 +598,17 @@ export function App() {
   const [paywallModalOpen, setPaywallModalOpen] = useState(false);
   const [casaBookletOpen, setCasaBookletOpen] = useState(false);
   const [gpsTrackerOpen, setGpsTrackerOpen] = useState(false);
+  const [gpsSessionActive, setGpsSessionActive] = useState(false);
   const [overdueBannerDismissed, setOverdueBannerDismissed] = useState(false);
+
+  // Quick Feedback Form States (Footer)
+  const [feedbackType, setFeedbackType] = useState<'feature' | 'bug'>('feature');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
+  const [feedbackStatus, setFeedbackStatus] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   // Toast Notification State after Motorcycle Registration
   const [registrationToast, setRegistrationToast] = useState<{
@@ -718,11 +729,56 @@ export function App() {
 
   const handleFinishGpsRide = useCallback(
     (distanceDeltaKm: number) => {
+      setGpsTrackerOpen(false);
+      setGpsSessionActive(false);
       if (!activeBike || distanceDeltaKm <= 0) return;
       handleUpdateOdometer(activeBike.odometer + distanceDeltaKm);
     },
     [activeBike, handleUpdateOdometer]
   );
+
+  const handleSubmitQuickFeedback = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.uid) {
+      setFeedbackStatus({
+        type: 'error',
+        text: 'Please sign in to submit feedback.',
+      });
+      return;
+    }
+
+    const trimmed = feedbackMessage.trim();
+    if (!trimmed) {
+      setFeedbackStatus({
+        type: 'error',
+        text: 'Please enter a short description of your feature request or bug report.',
+      });
+      return;
+    }
+
+    setFeedbackSubmitting(true);
+    setFeedbackStatus(null);
+    try {
+      await submitQuickFeedbackToFirestore({
+        userId: user.uid,
+        userEmail: user.email,
+        type: feedbackType,
+        message: trimmed,
+      });
+      setFeedbackMessage('');
+      setFeedbackStatus({
+        type: 'success',
+        text: 'Salamat! Your feedback has been submitted.',
+      });
+    } catch (err: any) {
+      setFeedbackStatus({
+        type: 'error',
+        text: err?.message || 'Failed to submit feedback. Please try again.',
+      });
+    } finally {
+      setFeedbackSubmitting(false);
+    }
+  };
 
   const handleUpdatePlate = useCallback(
     (newPlate: string) => {
@@ -1090,6 +1146,8 @@ export function App() {
       setReminders([]);
       setServiceRecords([]);
       setActiveBikeId('');
+      setGpsTrackerOpen(false);
+      setGpsSessionActive(false);
       setShowAuthScreen(false);
       setShowWelcomeScreen(true);
       setActiveTab('reminders');
@@ -1178,7 +1236,7 @@ export function App() {
     <div
       data-testid="app-root-container"
       data-theme={theme}
-      className={`min-h-screen bg-[#F8F9FA] text-slate-800 pb-28 selection:bg-[#FF6B00] selection:text-white transition-colors duration-200 ${
+      className={`min-h-screen w-full max-w-full overflow-x-hidden bg-[#F8F9FA] text-slate-800 pb-28 selection:bg-[#FF6B00] selection:text-white transition-colors duration-200 ${
         theme === 'dark' ? 'dark bg-[#070B12] text-slate-100' : ''
       }`}
     >
@@ -1261,7 +1319,7 @@ export function App() {
       )}
 
       {/* Main Content Container */}
-      <main className="max-w-2xl lg:max-w-4xl mx-auto px-4 sm:px-6 pt-5">
+      <main className="max-w-2xl lg:max-w-4xl mx-auto px-3.5 sm:px-6 pt-4 sm:pt-5">
         {showAuthScreen && !user ? (
           <AccountRegistrationScreen
             initialMode={authScreenInitialMode}
@@ -1320,16 +1378,19 @@ export function App() {
                 setGarageCustomMode(Boolean(activeBike.isCustom));
                 setGarageModalOpen(true);
               }}
-              onOpenGpsRide={() => setGpsTrackerOpen(true)}
+              onOpenGpsRide={() => {
+                setGpsSessionActive(true);
+                setGpsTrackerOpen(true);
+              }}
               onOpenPaywall={() => setPaywallModalOpen(true)}
               isPro={isPro}
             />
 
             {(activeTab === 'reminders' || activeTab === 'garage') && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-extrabold text-slate-900">
+                <div className="flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-base sm:text-lg font-extrabold text-slate-900">
                       Maintenance Schedule
                     </h2>
                     <p className="text-xs text-slate-500">
@@ -1347,7 +1408,7 @@ export function App() {
                       setEditingReminder(null);
                       setReminderModalOpen(true);
                     }}
-                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold text-xs shadow-sm transition-colors cursor-pointer"
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold text-xs shadow-sm transition-colors cursor-pointer shrink-0 min-h-[38px]"
                   >
                     <Plus className="w-4 h-4 stroke-[2.5]" />
                     <span>Add Reminder</span>
@@ -1446,20 +1507,100 @@ export function App() {
           </div>
         )}
 
-        {/* Discrete Footer with Admin Access Link (Visible Only to Verified Owner) */}
-        <footer className="pt-8 pb-4 text-center text-[10px] text-slate-400 space-y-1.5">
-          <p>MotoCare PH • Motorcycle Maintenance &amp; Digital Garage</p>
-          {isExactAdmin && (
-            <div>
-              <button
-                type="button"
-                onClick={handleOpenAdminPortal}
-                className="text-slate-400 hover:text-[#FF6B00] transition-colors underline cursor-pointer"
-              >
-                Owner Admin Portal
-              </button>
+        {/* Discrete Footer with Quick Feedback Form & Admin Access Link */}
+        <footer className="pt-8 pb-4 text-center text-[10px] text-slate-400 space-y-4">
+          <div
+            data-testid="footer-quick-feedback"
+            className="w-full max-w-md mx-auto bg-white border border-slate-200/80 rounded-2xl p-3.5 text-left shadow-xs space-y-2.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-extrabold text-slate-800">Quick Feedback</span>
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg">
+                <button
+                  type="button"
+                  data-testid="feedback-type-feature-btn"
+                  onClick={() => setFeedbackType('feature')}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                    feedbackType === 'feature'
+                      ? 'bg-white text-[#FF6B00] shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  Feature Request
+                </button>
+                <button
+                  type="button"
+                  data-testid="feedback-type-bug-btn"
+                  onClick={() => setFeedbackType('bug')}
+                  className={`px-2 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+                    feedbackType === 'bug'
+                      ? 'bg-white text-[#FF6B00] shadow-2xs'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  Report Bug
+                </button>
+              </div>
             </div>
-          )}
+
+            <form
+              data-testid="footer-quick-feedback-form"
+              onSubmit={handleSubmitQuickFeedback}
+              className="flex flex-col xs:flex-row items-stretch xs:items-center gap-2"
+            >
+              <input
+                type="text"
+                data-testid="footer-quick-feedback-input"
+                value={feedbackMessage}
+                onChange={(e) => setFeedbackMessage(e.target.value)}
+                disabled={!user?.uid || feedbackSubmitting}
+                maxLength={500}
+                placeholder={
+                  user?.uid
+                    ? feedbackType === 'bug'
+                      ? 'Describe the bug you encountered...'
+                      : 'Suggest a feature for MotoCare PH...'
+                    : 'Sign in to submit feature requests or report bugs'
+                }
+                aria-label="Quick Feedback message"
+                className="flex-1 min-w-0 min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#FF6B00] disabled:opacity-60 disabled:cursor-not-allowed"
+              />
+              <button
+                type="submit"
+                data-testid="footer-quick-feedback-submit"
+                disabled={!user?.uid || feedbackSubmitting || !feedbackMessage.trim()}
+                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold text-xs transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {feedbackSubmitting ? 'Sending...' : 'Submit'}
+              </button>
+            </form>
+
+            {feedbackStatus && (
+              <p
+                data-testid="footer-quick-feedback-status"
+                className={`text-[11px] font-semibold ${
+                  feedbackStatus.type === 'success' ? 'text-emerald-600' : 'text-red-600'
+                }`}
+              >
+                {feedbackStatus.text}
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <p>MotoCare PH • Motorcycle Maintenance &amp; Digital Garage</p>
+            {isExactAdmin && (
+              <div>
+                <button
+                  type="button"
+                  onClick={handleOpenAdminPortal}
+                  className="text-slate-400 hover:text-[#FF6B00] transition-colors underline cursor-pointer"
+                >
+                  Owner Admin Portal
+                </button>
+              </div>
+            )}
+          </div>
         </footer>
       </main>
 
@@ -1543,18 +1684,35 @@ export function App() {
         />
       )}
 
-      {activeBike && gpsTrackerOpen && (
-        <GpsRideTrackerSheet
-          bike={activeBike}
-          subscription={subscription}
-          hasProAccess={isPro}
-          onFinishRide={handleFinishGpsRide}
-          onOpenPaywall={() => {
-            setGpsTrackerOpen(false);
-            setPaywallModalOpen(true);
-          }}
-          onClose={() => setGpsTrackerOpen(false)}
-        />
+      {activeBike && (gpsTrackerOpen || gpsSessionActive) && (
+        <div
+          data-testid="gps-tracker-backdrop-wrapper"
+          className={
+            gpsTrackerOpen
+              ? 'fixed inset-0 z-50 bg-black/60'
+              : 'hidden'
+          }
+        >
+          <GpsRideTrackerSheet
+            key={activeBike.id}
+            isOpen={gpsTrackerOpen}
+            bike={activeBike}
+            subscription={subscription}
+            hasProAccess={isPro}
+            onFinishRide={handleFinishGpsRide}
+            onOpenPaywall={() => {
+              setGpsTrackerOpen(false);
+              setGpsSessionActive(false);
+              setPaywallModalOpen(true);
+            }}
+            onClose={() => {
+              setGpsTrackerOpen(false);
+              if (!isPro) {
+                setGpsSessionActive(false);
+              }
+            }}
+          />
+        </div>
       )}
 
       <LegacyMigrationModal

@@ -615,12 +615,12 @@ export const AccountRegistrationScreen: React.FC<AccountRegistrationScreenProps>
 
       {/* Terms of Service & Privacy Policy Modal */}
       {legalDocModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-slate-100 space-y-4 text-left">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-[#FF6B00]" />
-                <h3 className="text-base font-extrabold text-slate-900">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3.5 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-3xl p-4 sm:p-6 shadow-2xl border border-slate-100 space-y-4 text-left">
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2 min-w-0">
+                <ShieldCheck className="w-5 h-5 text-[#FF6B00] shrink-0" />
+                <h3 className="text-sm sm:text-base font-extrabold text-slate-900 truncate">
                   {legalDocModal === 'terms'
                     ? 'MotoCare Terms of Service'
                     : 'MotoCare Privacy Policy'}

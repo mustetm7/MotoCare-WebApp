@@ -3512,3 +3512,58 @@ export async function deleteExpenseEntryFromFirestore(expenseId: string): Promis
   }
 }
 
+export interface QuickFeedbackSubmission {
+  id: string;
+  userId: string;
+  userEmail?: string;
+  type: 'feature' | 'bug';
+  message: string;
+  createdAt: string;
+}
+
+/**
+ * Submits a user's Quick Feedback (feature request or bug report) to the Firestore `feedback` collection.
+ * Enforces that only logged-in users (`userId` present) can submit.
+ */
+export async function submitQuickFeedbackToFirestore(input: {
+  userId: string;
+  userEmail?: string | null;
+  type: 'feature' | 'bug';
+  message: string;
+}): Promise<QuickFeedbackSubmission> {
+  const trimmedUserId = (input.userId || '').trim();
+  if (!trimmedUserId) {
+    throw new Error('Only logged-in users can submit feedback.');
+  }
+
+  const trimmedMessage = (input.message || '').trim();
+  if (!trimmedMessage) {
+    throw new Error('Please enter a feedback message before submitting.');
+  }
+  if (trimmedMessage.length > 500) {
+    throw new Error('Feedback message must be 500 characters or fewer.');
+  }
+
+  const feedbackType: 'feature' | 'bug' = input.type === 'bug' ? 'bug' : 'feature';
+  const feedbackId = `fb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowIso = new Date().toISOString();
+
+  const payload: QuickFeedbackSubmission = stripUndefined({
+    id: feedbackId,
+    userId: trimmedUserId,
+    ...(input.userEmail ? { userEmail: input.userEmail.trim() } : {}),
+    type: feedbackType,
+    message: trimmedMessage,
+    createdAt: nowIso,
+  }) as QuickFeedbackSubmission;
+
+  const path = `feedback/${feedbackId}`;
+  try {
+    await setDoc(doc(db, 'feedback', feedbackId), payload);
+    return payload;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+

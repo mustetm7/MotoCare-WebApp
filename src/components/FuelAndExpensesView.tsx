@@ -521,7 +521,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
   if (!isPro && !isExpiredPro && !hasAnyStoredEntries) {
     return (
       <div className="space-y-5" data-testid="fuel-expenses-locked-screen">
-        <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-100">
           <button
             type="button"
             onClick={() => {
@@ -530,7 +530,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
             }}
             className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#FF6B00] shadow-2xs cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4 text-[#FF6B00]" />
+            <ArrowLeft className="w-4 h-4 text-[#FF6B00] shrink-0" />
             <span>Balik sa Schedule</span>
           </button>
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider font-mono">
@@ -538,7 +538,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
           </span>
         </div>
 
-        <div className="p-6 sm:p-8 rounded-3xl bg-white border-2 border-orange-200/80 shadow-md text-center space-y-5 relative overflow-hidden">
+        <div className="p-5 sm:p-8 rounded-3xl bg-white border-2 border-orange-200/80 shadow-md text-center space-y-5 relative overflow-hidden">
           <div className="w-14 h-14 rounded-2xl bg-orange-50 border border-orange-200 flex items-center justify-center mx-auto text-[#FF6B00]">
             <Lock className="w-7 h-7" />
           </div>
@@ -557,7 +557,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 max-w-sm mx-auto text-left">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-2.5 max-w-sm mx-auto text-left">
             <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/70">
               <div className="text-[10px] font-bold text-slate-400 uppercase">Km per Liter</div>
               <div className="text-sm font-extrabold font-mono text-slate-800 mt-0.5">
@@ -582,7 +582,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
                 sounds.playClick();
                 onOpenPaywall();
               }}
-              className="w-full sm:w-auto min-w-[220px] py-3.5 px-6 rounded-2xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-extrabold text-sm shadow-md shadow-[#FF6B00]/25 transition-all active:scale-95 cursor-pointer"
+              className="w-full sm:w-auto min-w-[200px] py-3.5 px-6 rounded-2xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-extrabold text-sm shadow-md shadow-[#FF6B00]/25 transition-all active:scale-95 cursor-pointer"
             >
               Mag-Pro na
             </button>
@@ -598,7 +598,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
   return (
     <div className="space-y-5" data-testid="fuel-expenses-view">
       {/* Top Navigation */}
-      <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-100">
         <button
           type="button"
           onClick={() => {
@@ -607,7 +607,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
           }}
           className="flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-[#FF6B00] transition-colors py-1.5 px-3 rounded-xl bg-white border border-slate-200 hover:border-[#FF6B00] shadow-2xs cursor-pointer"
         >
-          <ArrowLeft className="w-4 h-4 text-[#FF6B00]" />
+          <ArrowLeft className="w-4 h-4 text-[#FF6B00] shrink-0" />
           <span>Balik sa Schedule</span>
         </button>
 
@@ -658,10 +658,10 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
       )}
 
       {/* Header & Quick Toggle Form Button */}
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
+        <div className="min-w-0">
           <h2 className="text-xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-            <Fuel className="w-5 h-5 text-[#FF6B00]" />
+            <Fuel className="w-5 h-5 text-[#FF6B00] shrink-0" />
             <span>Fuel Log &amp; Gastos</span>
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -679,7 +679,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
               }
               setIsFormOpen((v) => !v);
             }}
-            className="px-4 py-2.5 rounded-2xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-extrabold text-xs flex items-center gap-1.5 shadow-sm shadow-[#FF6B00]/20 cursor-pointer shrink-0"
+            className="w-full xs:w-auto justify-center px-4 py-2.5 rounded-2xl bg-[#FF6B00] hover:bg-[#EA580C] text-white font-extrabold text-xs flex items-center gap-1.5 shadow-sm shadow-[#FF6B00]/20 cursor-pointer shrink-0"
           >
             <Plus className="w-4 h-4 stroke-[2.5]" />
             <span>{isFormOpen ? 'Itago ang Form' : 'Mag-lista ng Gastos'}</span>
@@ -694,7 +694,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
           data-testid="expense-entry-form"
           className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-200/90 shadow-sm space-y-4"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-extrabold text-slate-900">
               {editingEntry ? 'I-edit ang Gastos Entry' : 'Magdagdag ng Gastos / Karga ng Gas'}
             </h3>
@@ -715,7 +715,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
             <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">
               Uri ng Gastos (Type)
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 gap-2">
               {ALLOWED_EXPENSE_TYPES.map((typeOption) => {
                 const selected = entryType === typeOption;
                 return (
@@ -727,7 +727,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
                       setEntryType(typeOption);
                       setFormError(null);
                     }}
-                    className={`py-3 px-3 rounded-2xl text-xs font-extrabold border text-left transition-all flex items-center justify-between cursor-pointer ${
+                    className={`py-3 px-3 rounded-2xl text-xs font-extrabold border text-left transition-all flex items-center justify-between gap-1.5 cursor-pointer ${
                       selected
                         ? 'bg-[#FF6B00] text-white border-[#FF6B00] shadow-xs'
                         : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
@@ -975,8 +975,8 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
         </div>
 
         {fuelStats && fuelStats.hasEnoughData && fuelStats.kmPerLiter !== null && fuelStats.costPerKmPhp !== null ? (
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-3">
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100 min-w-0">
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
                 Km per Liter
               </div>
@@ -991,7 +991,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
               </div>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-orange-50/60 border border-orange-100">
+            <div className="p-3.5 rounded-2xl bg-orange-50/60 border border-orange-100 min-w-0">
               <div className="text-[10px] font-bold text-[#FF6B00] uppercase tracking-wide">
                 Gastos kada Kilometro
               </div>
@@ -1193,7 +1193,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
                 <div
                   key={entry.id}
                   data-testid={`expense-entry-row-${entry.id}`}
-                  className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200/80 flex items-start justify-between gap-3"
+                  className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200/80 flex flex-col xs:flex-row xs:items-start justify-between gap-2.5 xs:gap-3"
                 >
                   <div className="space-y-1 flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -1241,7 +1241,7 @@ export const FuelAndExpensesView: React.FC<FuelAndExpensesViewProps> = ({
                     )}
                   </div>
 
-                  <div className="text-right shrink-0 space-y-1.5">
+                  <div className="flex xs:block items-center justify-between pt-2 xs:pt-0 border-t xs:border-t-0 border-slate-200/60 xs:text-right shrink-0 xs:space-y-1.5">
                     <div className="text-sm font-extrabold font-mono text-slate-900">
                       ₱{Number(entry.amountPhp).toLocaleString('en-PH', {
                         minimumFractionDigits: 2,

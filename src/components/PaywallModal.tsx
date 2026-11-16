@@ -320,7 +320,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
         </a>
 
         {/* Body */}
-        <div className="p-5 sm:p-6 space-y-5 overflow-y-auto">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto">
           {isEmailUnverified && !isPro && (
             <div
               data-testid="paywall-verify-email-banner"
@@ -438,7 +438,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                     Our admin is verifying your ₱49 GCash transfer. Once approved in the Admin Portal, your account will automatically unlock <strong>MotoCare Pro</strong>.
                   </p>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-amber-200/60">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-amber-200/60">
                     <button
                       type="button"
                       onClick={() => setShowQRView(true)}
@@ -482,7 +482,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                   </div>
 
                   {subscription.expiryDate && (
-                    <div className="p-2.5 rounded-xl bg-white border border-emerald-200/80 flex items-center justify-between text-xs">
+                    <div className="p-2.5 rounded-xl bg-white border border-emerald-200/80 flex flex-wrap items-center justify-between gap-1.5 text-xs">
                       <span className="text-slate-500 font-medium">Valid Until (Asia/Manila):</span>
                       <span className="font-mono font-bold text-emerald-800">
                         {new Date(subscription.expiryDate).toLocaleDateString('en-PH', {
@@ -496,14 +496,14 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                     </div>
                   )}
 
-                  <div className="pt-1 border-t border-emerald-200/60 flex items-center justify-between">
+                  <div className="pt-1 border-t border-emerald-200/60 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] text-emerald-800">
                       Want to renew early? Extends from your current expiry date.
                     </span>
                     <button
                       type="button"
                       onClick={() => setShowQRView(true)}
-                      className="text-xs font-extrabold text-[#0057E7] hover:underline cursor-pointer shrink-0 ml-2"
+                      className="text-xs font-extrabold text-[#0057E7] hover:underline cursor-pointer shrink-0"
                     >
                       Renew (+1 Month)
                     </button>
@@ -552,7 +552,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                 </div>
 
                 {/* Primary QR Action Toolbar */}
-                <div className="mt-3 grid grid-cols-2 gap-2 w-full">
+                <div className="mt-3 grid grid-cols-1 xs:grid-cols-2 gap-2 w-full">
                   <button
                     type="button"
                     onClick={handleDownloadQR}
@@ -694,7 +694,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                   )}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="flex flex-col-reverse xs:flex-row gap-2">
                   <button
                     type="button"
                     onClick={() => setShowQRView(false)}
@@ -707,7 +707,7 @@ export const PaywallModal: React.FC<PaywallModalProps> = ({
                     disabled={submitting || isEmailUnverified}
                     className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-[#FF6B00] to-amber-500 hover:from-[#e05e00] hover:to-amber-600 disabled:opacity-50 text-slate-950 font-extrabold text-xs shadow-md shadow-orange-500/20 flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                   >
-                    <Send className="w-3.5 h-3.5" />
+                    <Send className="w-3.5 h-3.5 shrink-0" />
                     <span>
                       {submitting
                         ? 'Submitting Reference...'

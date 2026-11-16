@@ -51,46 +51,46 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md overflow-y-auto animate-in fade-in duration-200">
-      <div className="bg-[#18181b] border border-neutral-700/80 rounded-2xl w-full max-w-3xl my-6 overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="bg-[#18181b] border border-neutral-700/80 rounded-2xl w-full max-w-3xl my-4 sm:my-6 overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-neutral-800 flex items-center justify-between bg-neutral-900/60 shrink-0">
-          <div className="flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-[#FF6B00]" />
-            <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
+        <div className="px-3.5 sm:px-5 py-3.5 sm:py-4 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-2.5 bg-neutral-900/60 shrink-0">
+          <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
+            <Building2 className="w-5 h-5 text-[#FF6B00] shrink-0 mt-0.5 sm:mt-0" />
+            <div className="min-w-0">
+              <h3 className="text-sm sm:text-base font-bold text-white flex flex-wrap items-center gap-1.5 sm:gap-2">
                 <span>Verified Philippine Casa Service Booklet</span>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                   OFFICIAL PASSPORT
                 </span>
               </h3>
               <p className="text-[11px] text-neutral-400">
-                Tamper-resistant digital maintenance booklet for warranty compliance & high resale valuation.
+                Tamper-resistant digital maintenance booklet for warranty compliance &amp; high resale valuation.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 ml-auto">
             <button
               onClick={handlePrint}
-              className="px-3 py-1.5 text-xs font-semibold bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg border border-neutral-700 flex items-center gap-1.5 transition-colors"
+              className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg border border-neutral-700 flex items-center gap-1.5 transition-colors"
               title="Print booklet or Save as PDF"
             >
-              <Printer className="w-3.5 h-3.5" />
+              <Printer className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">Print / PDF</span>
             </button>
 
             <button
               onClick={handleExportCsv}
-              className="px-3 py-1.5 text-xs font-semibold bg-[#FF6B00] hover:bg-[#FF8533] text-neutral-950 rounded-lg flex items-center gap-1.5 transition-colors shadow-sm"
+              className="px-2.5 sm:px-3 py-1.5 text-xs font-semibold bg-[#FF6B00] hover:bg-[#FF8533] text-neutral-950 rounded-lg flex items-center gap-1.5 transition-colors shadow-sm"
               title="Download CSV Booklet"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 shrink-0" />
               <span>Export CSV</span>
             </button>
 
             <button
               onClick={onClose}
-              className="p-1 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors ml-1"
+              className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -99,14 +99,14 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
 
         {/* Free Banner Lock notice if not pro */}
         {!isPro && (
-          <div className="p-3 bg-[#FF6B00]/15 border-b border-[#FF6B00]/30 px-5 flex items-center justify-between gap-3 text-xs shrink-0">
-            <div className="flex items-center gap-2 text-neutral-200">
-              <Sparkles className="w-4 h-4 text-[#FF6B00] shrink-0" />
+          <div className="p-3 bg-[#FF6B00]/15 border-b border-[#FF6B00]/30 px-3.5 sm:px-5 flex flex-col xs:flex-row items-start xs:items-center justify-between gap-2.5 text-xs shrink-0">
+            <div className="flex items-start sm:items-center gap-2 text-neutral-200">
+              <Sparkles className="w-4 h-4 text-[#FF6B00] shrink-0 mt-0.5 sm:mt-0" />
               <span>Previewing Casa Booklet. Upgrade to <strong>MotoCare Pro (₱49/mo)</strong> to export official PDF/CSV without watermarks.</span>
             </div>
             <button
               onClick={onOpenPaywall}
-              className="px-3 py-1 bg-[#FF6B00] hover:bg-[#FF8533] text-neutral-950 font-bold rounded text-xs whitespace-nowrap shadow-sm"
+              className="w-full xs:w-auto px-3 py-1.5 bg-[#FF6B00] hover:bg-[#FF8533] text-neutral-950 font-bold rounded-lg text-xs whitespace-nowrap shadow-sm shrink-0"
             >
               Upgrade (₱49)
             </button>
@@ -114,17 +114,17 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
         )}
 
         {/* Printable Booklet Sheet Content */}
-        <div className="p-6 overflow-y-auto space-y-6 bg-neutral-950 text-neutral-100 print:bg-white print:text-neutral-900">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-5 sm:space-y-6 bg-neutral-950 text-neutral-100 print:bg-white print:text-neutral-900">
           {/* Certificate Header Banner */}
-          <div className="p-5 rounded-2xl bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-950 border border-neutral-800 relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="space-y-1">
+          <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-950 border border-neutral-800 relative overflow-hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1 min-w-0">
               <div className="text-[10px] uppercase font-mono tracking-widest text-[#FF6B00] font-bold">
                 PHILIPPINE MOTORCYCLE PMS RECORD
               </div>
-              <h2 className="text-2xl font-black tracking-tight text-white">
+              <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white break-words">
                 {bike.year} {bike.brand} {bike.model}
               </h2>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400 font-mono">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-400 font-mono">
                 <span>Plate: <strong className="text-white">{bike.licensePlate || 'N/A'}</strong></span>
                 <span>·</span>
                 <span>Displacement: {bike.specs?.displacementCc}cc</span>
@@ -137,7 +137,7 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
 
             {/* Simulated Verified Casa Seal */}
             <div className="p-3 rounded-xl bg-neutral-900/90 border border-emerald-500/40 text-center shrink-0 flex items-center gap-3">
-              <ShieldCheck className="w-10 h-10 text-emerald-400" />
+              <ShieldCheck className="w-9 h-9 sm:w-10 sm:h-10 text-emerald-400 shrink-0" />
               <div className="text-left">
                 <div className="text-xs font-black text-emerald-400 tracking-wider">
                   CASA VERIFIED
@@ -153,7 +153,7 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
           </div>
 
           {/* Investment Summary */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
             <div className="p-3 rounded-xl bg-[#18181b] border border-neutral-800 text-xs">
               <span className="text-neutral-400 text-[11px]">Total Documented Spend</span>
               <div className="text-lg font-bold font-mono text-white mt-0.5">
@@ -177,14 +177,14 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
           {/* Service Passport Table */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400">
-              Chronological Service & Inspection Passport Stamps
+              Chronological Service &amp; Inspection Passport Stamps
             </h4>
 
             {bikeRecords.length > 0 ? (
               <div className="border border-neutral-800 rounded-xl overflow-hidden divide-y divide-neutral-800/80">
                 {bikeRecords.map((r) => (
-                  <div key={r.id} className="p-4 bg-[#18181b] flex flex-col md:flex-row md:items-start justify-between gap-3 text-xs">
-                    <div className="space-y-1.5 flex-1">
+                  <div key={r.id} className="p-3.5 sm:p-4 bg-[#18181b] flex flex-col md:flex-row md:items-start justify-between gap-3 text-xs">
+                    <div className="space-y-1.5 flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-mono font-bold text-white text-sm">
                           {r.odometer.toLocaleString()} km
@@ -202,11 +202,11 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
                         )}
                       </div>
 
-                      <div className="font-bold text-white text-sm">
+                      <div className="font-bold text-white text-sm break-words">
                         {r.title}
                       </div>
 
-                      <div className="text-neutral-400">
+                      <div className="text-neutral-400 break-words">
                         Service Center: <strong className="text-neutral-200">{r.shopName || 'Workshop'}</strong>
                         {r.oilBrandGrade && (
                           <span> · Oil: <span className="font-mono text-amber-400">{r.oilBrandGrade}</span></span>
@@ -217,13 +217,13 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
                       </div>
 
                       {r.notes && (
-                        <p className="text-[11px] text-neutral-400 italic">
+                        <p className="text-[11px] text-neutral-400 italic break-words">
                           &ldquo;{r.notes}&rdquo;
                         </p>
                       )}
                     </div>
 
-                    <div className="text-left md:text-right shrink-0">
+                    <div className="text-left md:text-right shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-neutral-800/80">
                       <div className="text-sm font-bold font-mono text-white">
                         ₱{r.totalCostPhp.toLocaleString()}
                       </div>
@@ -241,7 +241,7 @@ export const CasaBookletModal: React.FC<CasaBookletModalProps> = ({
             )}
           </div>
 
-          <div className="p-3 rounded-xl bg-neutral-900/50 border border-neutral-800 text-[10px] text-neutral-400 flex items-center justify-between">
+          <div className="p-3 rounded-xl bg-neutral-900/50 border border-neutral-800 text-[10px] text-neutral-400 flex flex-col xs:flex-row xs:items-center justify-between gap-1.5">
             <span>Verified by MotoCare PH Digital Garage Engine · Document Hash: #{bike.id.slice(-6).toUpperCase()}</span>
             <span>Accredited Philippine Maintenance Log</span>
           </div>

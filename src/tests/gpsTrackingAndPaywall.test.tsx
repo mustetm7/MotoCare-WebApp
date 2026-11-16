@@ -512,4 +512,187 @@ describe('MotoCare Pro Upgrade Modal & 1-Minute GPS Auto-Pause Suite', () => {
     unmount();
     expect(clearWatchSpy).toHaveBeenCalledWith(101);
   });
+
+  it('10. Renders GPS Ride Tracker (#gps-ride-tracker-modal) with absolute positioning inside a fixed full-screen bg-black/60 backdrop, mobile bottom-sheet layout, centered desktop layout, Close button, and Escape key dismissal without pushing dashboard content', () => {
+    const onClose = vi.fn();
+    render(
+      <div data-testid="dashboard-layout-wrapper">
+        <div data-testid="maintenance-reminders-section">Maintenance Schedule</div>
+        <GpsRideTrackerSheet
+          isOpen={true}
+          bike={TEST_BIKE}
+          subscription={PRO_SUBSCRIPTION}
+          hasProAccess={true}
+          onFinishRide={vi.fn()}
+          onClose={onClose}
+        />
+      </div>
+    );
+
+    const dialog = screen.getByRole('dialog', { name: /Live GPS Ride Tracker/i });
+    expect(dialog).toBeTruthy();
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.className).toContain('fixed');
+    expect(dialog.className).toContain('inset-0');
+    expect(dialog.className).toContain('z-50');
+    expect(dialog.className).toContain('bg-black/60');
+
+    const card = screen.getByTestId('gps-ride-tracker-modal-card');
+    expect(card.id).toBe('gps-ride-tracker-modal');
+    expect(card.className).toContain('absolute');
+    expect(card.className).toContain('bottom-0');
+    expect(card.className).toContain('inset-x-0');
+    expect(card.className).toContain('w-full');
+    expect(card.className).toContain('rounded-t-3xl');
+    expect(card.className).toContain('sm:top-1/2');
+    expect(card.className).toContain('sm:left-1/2');
+    expect(card.className).toContain('sm:-translate-x-1/2');
+    expect(card.className).toContain('sm:-translate-y-1/2');
+    expect(card.className).toContain('sm:rounded-3xl');
+
+    // Body scroll is locked while modal is open
+    expect(document.body.style.overflow).toBe('hidden');
+
+    // Clicking inside the modal card does not close the modal
+    fireEvent.click(card);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Clicking the visible close button triggers onClose
+    const closeBtn = screen.getByTestId('gps-modal-close-btn');
+    fireEvent.click(closeBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Pressing Escape key on desktop triggers onClose
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('11. Closing the modal and reopening it preserves the active GPS ride session, accumulated distance, duration, and 60s auto-pause without duplicate listeners or timers', () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+
+    const StatefulDashboardHost: React.FC = () => {
+      const [isOpen, setIsOpen] = React.useState(true);
+      return (
+        <div>
+          <button
+            type="button"
+            data-testid="launch-gps-btn"
+            onClick={() => setIsOpen(true)}
+          >
+            Launch Live GPS
+          </button>
+          <GpsRideTrackerSheet
+            isOpen={isOpen}
+            bike={TEST_BIKE}
+            subscription={PRO_SUBSCRIPTION}
+            hasProAccess={true}
+            onFinishRide={vi.fn()}
+            onClose={() => setIsOpen(false)}
+          />
+        </div>
+      );
+    };
+
+    render(<StatefulDashboardHost />);
+
+    expect(watchPositionSpy).toHaveBeenCalledTimes(1);
+    const initialIntervalCalls = setIntervalSpy.mock.calls.length;
+
+    // 1. Start moving and accumulate 1.00 km over 15 seconds while modal is open
+    act(() => {
+      watchCallback!(
+        createGeoPosition({
+          latitude: 14.5995,
+          longitude: 120.9842,
+          speed: 10,
+          timestamp: Date.now(),
+        })
+      );
+      vi.advanceTimersByTime(15000);
+      watchCallback!(
+        createGeoPosition({
+          latitude: 14.6085, // ~1.00 km north
+          longitude: 120.9842,
+          speed: 10,
+          timestamp: Date.now(),
+        })
+      );
+    });
+
+    expect(screen.getByTestId('gps-accumulated-distance').textContent).toBe('+1.00 km');
+    expect(screen.getByTestId('gps-elapsed-duration').textContent).toBe('00:23'); // 8s + 15s
+
+    // 2. Close the modal via the Close button
+    act(() => {
+      fireEvent.click(screen.getByTestId('gps-modal-close-btn'));
+    });
+
+    // Modal overlay is hidden and body scroll is restored, but GPS session remains active in background
+    expect(screen.queryByTestId('gps-ride-tracker-modal-overlay')).toBeNull();
+    expect(document.body.style.overflow).not.toBe('hidden');
+    expect(clearWatchSpy).not.toHaveBeenCalled();
+
+    // 3. While modal is closed, motorcycle moves another 0.50 km over 10 seconds, then stops for 60 seconds
+    act(() => {
+      vi.advanceTimersByTime(10000);
+      watchCallback!(
+        createGeoPosition({
+          latitude: 14.613, // +0.50 km (total 1.50 km)
+          longitude: 120.9842,
+          speed: 10,
+          timestamp: Date.now(),
+        })
+      );
+      // Now stop moving (advance 1s so timestamp is distinct from the moving fix)
+      vi.advanceTimersByTime(1000);
+      watchCallback!(
+        createGeoPosition({
+          latitude: 14.613,
+          longitude: 120.9842,
+          speed: 0,
+          timestamp: Date.now(),
+        })
+      );
+      // Wait 60 seconds while closed -> triggers 1-minute stationary auto-pause in background
+      vi.advanceTimersByTime(60000);
+    });
+
+    // 4. Reopen the modal from dashboard
+    act(() => {
+      fireEvent.click(screen.getByTestId('launch-gps-btn'));
+    });
+
+    // Modal is visible again with preserved +1.50 km distance, preserved duration (01:32), and auto-paused status
+    expect(screen.getByTestId('gps-ride-tracker-modal-overlay')).toBeTruthy();
+    expect(screen.getByTestId('gps-accumulated-distance').textContent).toBe('+1.50 km');
+    expect(screen.getByTestId('gps-elapsed-duration').textContent).toBe('01:32');
+    expect(screen.getByTestId('gps-auto-paused-badge').textContent).toBe(
+      'Paused - Motorcycle Stationary'
+    );
+
+    // Zero duplicate GPS listeners or timers were created across close & reopen
+    expect(watchPositionSpy).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy.mock.calls.length).toBe(initialIntervalCalls);
+  });
+
+  it('12. Enforces authenticated-only Quick Feedback submission validation', async () => {
+    const { submitQuickFeedbackToFirestore } = await import('../utils/firestoreService');
+
+    await expect(
+      submitQuickFeedbackToFirestore({
+        userId: '',
+        type: 'feature',
+        message: 'Add dark mode',
+      })
+    ).rejects.toThrow(/Only logged-in users can submit feedback/i);
+
+    await expect(
+      submitQuickFeedbackToFirestore({
+        userId: 'user-123',
+        type: 'bug',
+        message: '   ',
+      })
+    ).rejects.toThrow(/Please enter a feedback message/i);
+  });
 });
+

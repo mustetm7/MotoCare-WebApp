@@ -194,10 +194,10 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
     : `In ${remainingKm.toLocaleString()} km`;
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-100 p-5 shadow-sm space-y-3.5 relative hover:shadow-md transition-shadow">
+    <div className="bg-white rounded-3xl border border-slate-100 p-4 sm:p-5 shadow-sm space-y-3.5 relative hover:shadow-md transition-shadow">
       {/* Top Header: Unique SVG Task Icon + Category Tag & Delete Icon */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-start justify-between gap-2.5 sm:gap-3">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           {/* Unique SVG Task Icon with Visual Cue Accent */}
           <div
             className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 border shadow-2xs ${taskVisual.iconClass}`}
@@ -212,7 +212,7 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
             </span>
             <h3
               onClick={() => onEdit(reminder)}
-              className="text-base font-bold text-slate-900 cursor-pointer hover:text-[#FF6B00] transition-colors leading-snug truncate"
+              className="text-sm sm:text-base font-bold text-slate-900 cursor-pointer hover:text-[#FF6B00] transition-colors leading-snug truncate"
               title={reminder.title}
             >
               {reminder.title}
@@ -266,13 +266,13 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
       </div>
 
       {/* Progress Pill Bar matching screenshot */}
-      <div className={`p-2.5 px-3.5 rounded-2xl flex items-center justify-between text-xs font-semibold ${pillBgClass}`}>
+      <div className={`p-2.5 px-3 sm:px-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-1.5 text-xs font-semibold ${pillBgClass}`}>
         <span>{remainingText}</span>
         <span className="text-slate-500 font-normal">Next: {reminder.nextDueOdo.toLocaleString()} km</span>
       </div>
 
       {/* Interval, Last Done & Mark Serviced Row */}
-      <div className="flex items-end justify-between pt-1">
+      <div className="flex flex-wrap items-end justify-between gap-2 pt-1">
         <div className="text-xs text-slate-500 space-y-0.5">
           <div>Interval: every {reminder.intervalKm.toLocaleString()} km</div>
           <div className="text-[11px] text-slate-400">
@@ -286,7 +286,7 @@ export const MaintenanceCard: React.FC<MaintenanceCardProps> = ({
             sounds.playSuccess();
             onComplete(reminder);
           }}
-          className="flex items-center gap-1.5 text-xs font-bold text-slate-800 hover:text-[#FF6B00] px-3 py-1.5 rounded-xl hover:bg-orange-50 transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 text-xs font-bold text-slate-800 hover:text-[#FF6B00] px-3 py-1.5 rounded-xl hover:bg-orange-50 transition-colors cursor-pointer shrink-0"
         >
           <Check className="w-4 h-4 text-slate-700" />
           <span>Mark Serviced</span>

@@ -31,7 +31,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
         <div className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-white to-transparent pointer-events-none" />
       </div>
 
-      <div className="px-6 space-y-5 relative z-10 text-center pt-1">
+      <div className="px-4 sm:px-6 space-y-5 relative z-10 text-center pt-1">
         {isAuthenticated ? (
           /* Post-Authentication First-Time Rider Motorcycle Registration Prompt */
           <div className="space-y-2 pt-1" data-testid="post-auth-register-bike-prompt">
@@ -48,7 +48,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
         ) : (
           /* Unauthenticated Welcome Title & Subtitle */
           <div className="space-y-1.5">
-            <h1 className="text-4xl font-black text-[#0B132B] tracking-tight leading-none">
+            <h1 className="text-3xl xs:text-4xl font-black text-[#0B132B] tracking-tight leading-none">
               Moto<span className="text-[#FF6B00]">Care</span>
             </h1>
             <div className="text-[11px] font-extrabold text-[#3B4E6B] tracking-[0.18em] uppercase pt-1">
@@ -62,11 +62,11 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
 
         {/* 3 Feature Bullets */}
         <div className="text-left space-y-4 pt-1">
-          <div className="flex items-start gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-[#FFF3E6] text-[#FF6B00] flex items-center justify-center shrink-0 mt-0.5">
+          <div className="flex items-start gap-3 sm:gap-3.5">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-[#FFF3E6] text-[#FF6B00] flex items-center justify-center shrink-0 mt-0.5">
               <Bike className="w-5 h-5 stroke-[2.2]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-[15px] font-extrabold text-[#0B132B] leading-snug">
                 Philippine Bike Presets
               </div>
@@ -76,11 +76,11 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-start gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-[#FFF3E6] text-[#FF6B00] flex items-center justify-center shrink-0 mt-0.5">
+          <div className="flex items-start gap-3 sm:gap-3.5">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-[#FFF3E6] text-[#FF6B00] flex items-center justify-center shrink-0 mt-0.5">
               <Wrench className="w-5 h-5 stroke-[2.2]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-[15px] font-extrabold text-[#0B132B] leading-snug">
                 CVT &amp; Transmission Care
               </div>
@@ -90,11 +90,11 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-start gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-[#FFF3E6] text-[#FF6B00] flex items-center justify-center shrink-0 mt-0.5">
+          <div className="flex items-start gap-3 sm:gap-3.5">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-[#FFF3E6] text-[#FF6B00] flex items-center justify-center shrink-0 mt-0.5">
               <ShieldCheck className="w-5 h-5 stroke-[2.2]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="text-[15px] font-extrabold text-[#0B132B] leading-snug">
                 LTO Registration Tracker
               </div>
@@ -120,16 +120,16 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
                   sounds.playClick();
                   onAddMotorcycle();
                 }}
-                className="w-full py-3.5 px-6 bg-gradient-to-b from-[#FF8A00] via-[#FF6B00] to-[#F05000] hover:from-[#FF7A00] hover:to-[#E04400] text-white rounded-2xl font-extrabold shadow-lg shadow-[#FF6B00]/30 transition-all flex items-center justify-between active:scale-98 cursor-pointer"
+                className="w-full py-3.5 px-4 sm:px-6 bg-gradient-to-b from-[#FF8A00] via-[#FF6B00] to-[#F05000] hover:from-[#FF7A00] hover:to-[#E04400] text-white rounded-2xl font-extrabold shadow-lg shadow-[#FF6B00]/30 transition-all flex items-center justify-between active:scale-98 cursor-pointer"
               >
-                <span className="w-6" aria-hidden="true" />
-                <span className="flex items-center justify-center gap-2.5">
-                  <span className="text-xl sm:text-2xl font-extrabold tracking-wide">
+                <span className="w-5 sm:w-6 shrink-0" aria-hidden="true" />
+                <span className="flex items-center justify-center gap-2 min-w-0">
+                  <span className="text-lg xs:text-xl sm:text-2xl font-extrabold tracking-wide truncate">
                     Irehistro ang Motor Ko
                   </span>
                   <span className="sr-only">Add Your Motorcycle</span>
                 </span>
-                <ChevronRight className="w-6 h-6 stroke-[2.5] text-white/95 shrink-0" />
+                <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5] text-white/95 shrink-0" />
               </button>
 
               <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2">
@@ -164,16 +164,16 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
                   onAddMotorcycle();
                 }
               }}
-              className="w-full py-3.5 px-6 bg-gradient-to-b from-[#FF8A00] via-[#FF6B00] to-[#F05000] hover:from-[#FF7A00] hover:to-[#E04400] text-white rounded-2xl font-extrabold shadow-lg shadow-[#FF6B00]/30 transition-all flex items-center justify-between active:scale-98 cursor-pointer"
+              className="w-full py-3.5 px-4 sm:px-6 bg-gradient-to-b from-[#FF8A00] via-[#FF6B00] to-[#F05000] hover:from-[#FF7A00] hover:to-[#E04400] text-white rounded-2xl font-extrabold shadow-lg shadow-[#FF6B00]/30 transition-all flex items-center justify-between active:scale-98 cursor-pointer"
             >
-              <span className="w-6" aria-hidden="true" />
-              <span className="flex items-center justify-center gap-2.5">
-                <span className="text-2xl font-extrabold italic tracking-wide">
+              <span className="w-5 sm:w-6 shrink-0" aria-hidden="true" />
+              <span className="flex items-center justify-center gap-2.5 min-w-0">
+                <span className="text-xl xs:text-2xl font-extrabold italic tracking-wide">
                   Simulan Na!
                 </span>
                 <span className="sr-only">Add Your Motorcycle</span>
               </span>
-              <ChevronRight className="w-6 h-6 stroke-[2.5] text-white/95 shrink-0" />
+              <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5] text-white/95 shrink-0" />
             </button>
           )}
 

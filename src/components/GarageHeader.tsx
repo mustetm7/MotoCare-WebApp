@@ -52,25 +52,25 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
   return (
     <div className="space-y-5">
       {/* Active Bike Profile Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-2.5 sm:gap-3">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span
-              className="w-2.5 h-2.5 rounded-full inline-block"
+              className="w-2.5 h-2.5 rounded-full inline-block shrink-0"
               style={{ backgroundColor: bike.customColorBadge || '#00C5FF' }}
             />
-            <span className="text-sm font-semibold text-slate-500">
+            <span className="text-xs sm:text-sm font-semibold text-slate-500 truncate">
               {bike.year} {bike.brand}
             </span>
           </div>
 
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-0.5">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight mt-0.5 break-words">
             {bike.model}
           </h1>
 
           {bike.nickname && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-orange-50 border border-orange-200/80 text-xs font-bold text-[#FF6B00] mt-1 shadow-2xs">
-              <span>&apos;{bike.nickname}&apos;</span>
+            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-orange-50 border border-orange-200/80 text-xs font-bold text-[#FF6B00] mt-1 shadow-2xs max-w-full truncate">
+              <span className="truncate">&apos;{bike.nickname}&apos;</span>
             </div>
           )}
         </div>
@@ -79,30 +79,30 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
         <button
           type="button"
           onClick={onOpenEditBike}
-          className="px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-100 text-[#0097A7] text-[11px] font-bold tracking-wide uppercase shadow-sm hover:bg-cyan-100 transition-colors whitespace-nowrap shrink-0"
+          className="px-2.5 sm:px-3 py-1 rounded-xl bg-cyan-50 border border-cyan-100 text-[#0097A7] text-[10px] sm:text-[11px] font-bold tracking-wide uppercase shadow-sm hover:bg-cyan-100 transition-colors whitespace-nowrap shrink-0"
         >
           {bike.motorcycleType || bike.specs?.transmission || 'SCOOTER / AT'}
         </button>
       </div>
 
       {/* Current Odometer Card */}
-      <div className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm relative overflow-hidden">
-        <div className="flex items-center justify-between">
+      <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-100 shadow-sm relative overflow-hidden">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 tracking-wider uppercase">
-            <Gauge className="w-4 h-4 text-[#FF6B00]" />
+            <Gauge className="w-4 h-4 text-[#FF6B00] shrink-0" />
             <span>CURRENT ODOMETER</span>
           </div>
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200/60 uppercase">
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200/60 uppercase shrink-0">
             {bike.unit || 'KM'}
           </span>
         </div>
 
-        <div className="flex items-center justify-between mt-3">
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-4xl font-extrabold text-slate-900 tracking-tight font-mono">
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+          <div className="flex items-baseline gap-1.5 min-w-0">
+            <span className="text-3xl xs:text-4xl font-extrabold text-slate-900 tracking-tight font-mono truncate">
               {bike.odometer.toLocaleString()}
             </span>
-            <span className="text-sm font-semibold text-slate-500">
+            <span className="text-sm font-semibold text-slate-500 shrink-0">
               {bike.unit || 'km'}
             </span>
           </div>
@@ -110,7 +110,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
           <button
             type="button"
             onClick={onOpenEditOdometer}
-            className="px-5 py-2.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#FF6B00]/25 transition-all active:scale-95"
+            className="px-4 sm:px-5 py-2.5 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-[#FF6B00]/25 transition-all active:scale-95 shrink-0"
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>Update</span>
@@ -119,19 +119,21 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
       </div>
 
       {/* Auto-Track Ride (PRO Banner) */}
-      <div className="p-4 rounded-2xl bg-white border border-slate-100 shadow-sm flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-slate-100 shadow-sm flex items-center justify-between gap-2.5 sm:gap-3">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center text-[#FF6B00] shrink-0">
             <Navigation className="w-5 h-5 fill-[#FF6B00]" />
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-sm font-bold text-slate-800">Auto-Track Ride</span>
               <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-slate-900 text-amber-400 font-mono">
                 PRO
               </span>
             </div>
-            <p className="text-[11px] text-slate-500">Live GPS auto-increments odometer</p>
+            <p className="text-[11px] text-slate-500 truncate xs:whitespace-normal">
+              Live GPS auto-increments odometer
+            </p>
           </div>
         </div>
 
@@ -144,7 +146,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
               onOpenPaywall();
             }
           }}
-          className="px-4 py-2 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-[#FF6B00]/20 whitespace-nowrap"
+          className="px-3.5 sm:px-4 py-2 bg-[#FF6B00] hover:bg-[#EA580C] text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-[#FF6B00]/20 whitespace-nowrap shrink-0"
         >
           {isPro ? 'Launch' : 'Unlock'}
         </button>
@@ -152,7 +154,7 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
 
       {/* Quick Add After Ride Section */}
       <div className="space-y-2.5">
-        <div className="flex items-center justify-between text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
           <span className="font-medium text-slate-500">Quick Add After Ride</span>
           <button
             type="button"
@@ -173,13 +175,13 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
               placeholder="e.g. 38 km"
               value={customDistance}
               onChange={(e) => setCustomDistance(e.target.value === '' ? '' : Number(e.target.value))}
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
+              className="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-[#FF6B00]"
               autoFocus
             />
             <button
               type="submit"
               disabled={!customDistance || customDistance <= 0}
-              className="px-4 py-1.5 bg-[#FF6B00] text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50"
+              className="px-4 py-1.5 bg-[#FF6B00] text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50 shrink-0"
             >
               Add KM
             </button>
@@ -200,25 +202,25 @@ export const GarageHeader: React.FC<GarageHeaderProps> = ({
       </div>
 
       {/* Status Counters Row matching screenshot */}
-      <div className="flex items-center justify-around py-2 px-3 bg-white rounded-2xl border border-slate-100 shadow-sm text-xs">
+      <div className="flex flex-wrap items-center justify-around gap-2 py-2 px-3 bg-white rounded-2xl border border-slate-100 shadow-sm text-xs">
         <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-          <AlertTriangle className="w-4 h-4 text-slate-400" />
+          <AlertTriangle className="w-4 h-4 text-slate-400 shrink-0" />
           <span>{overdueCount} Overdue</span>
         </div>
 
         <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-          <Wrench className="w-4 h-4 text-slate-400" />
+          <Wrench className="w-4 h-4 text-slate-400 shrink-0" />
           <span>{dueSoonCount} Due Soon</span>
         </div>
 
         <div className="flex items-center gap-1.5 text-emerald-600 font-bold">
-          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+          <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
           <span>{goodCount} Good</span>
         </div>
       </div>
 
       {/* Tabs Navigation */}
-      <div className="flex items-center justify-around border-b border-slate-200 pt-2 overflow-x-auto">
+      <div className="flex items-center justify-start sm:justify-around border-b border-slate-200 pt-2 overflow-x-auto no-scrollbar">
         <button
           type="button"
           onClick={() => {

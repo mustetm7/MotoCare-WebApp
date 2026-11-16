@@ -291,7 +291,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {settingsMenuOpen && (
                 <div
                   data-testid="user-settings-menu"
-                  className="absolute right-0 mt-2 w-64 bg-white border border-slate-100 rounded-2xl shadow-2xl p-3.5 z-50 text-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-100"
+                  className="fixed inset-x-2.5 top-16 sm:inset-x-auto sm:top-full sm:absolute sm:right-0 sm:mt-2 sm:w-64 max-w-[calc(100vw-1.25rem)] bg-white border border-slate-100 rounded-2xl shadow-2xl p-3.5 z-50 text-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-100"
                 >
                   <div className="font-extrabold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
@@ -401,7 +401,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
 
               {bellOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-3xl shadow-2xl border border-slate-100 p-4 z-50 text-xs space-y-3 animate-in fade-in zoom-in-95 duration-100">
+                <div className="fixed inset-x-2.5 top-16 sm:inset-x-auto sm:top-full sm:absolute sm:right-0 sm:mt-2 sm:w-80 max-w-[calc(100vw-1.25rem)] bg-white rounded-3xl shadow-2xl border border-slate-100 p-4 z-50 text-xs space-y-3 animate-in fade-in zoom-in-95 duration-100">
                   <div className="font-extrabold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
                     <span className="flex items-center gap-1.5">
                       <Bell className="w-4 h-4 text-[#FF6B00]" />
@@ -634,7 +634,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                   {/* User Profile Dropdown Menu */}
                   {user && userMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-60 bg-white border border-slate-100 rounded-2xl shadow-xl p-3 z-50 text-xs space-y-2 animate-in fade-in">
+                    <div className="fixed inset-x-2.5 top-16 sm:inset-x-auto sm:top-full sm:absolute sm:right-0 sm:mt-2 sm:w-60 max-w-[calc(100vw-1.25rem)] bg-white border border-slate-100 rounded-2xl shadow-xl p-3 z-50 text-xs space-y-2 animate-in fade-in">
                       <div className="border-b border-slate-100 pb-2">
                         <div className="font-extrabold text-slate-800 truncate">{user.displayName || 'MotoCare Rider'}</div>
                         <div className="text-[10px] text-slate-400 truncate">{user.email}</div>
@@ -757,7 +757,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               {/* Shared Garage Switcher Dropdown (for mobile & desktop) */}
               {bikeMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-slate-100 rounded-2xl shadow-xl py-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="fixed inset-x-2.5 top-16 sm:inset-x-auto sm:top-full sm:absolute sm:right-0 sm:mt-2 sm:w-64 max-w-[calc(100vw-1.25rem)] bg-white border border-slate-100 rounded-2xl shadow-xl py-2 z-50 animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 flex items-center justify-between">
                     <span>Garage Bikes ({motorcycles.length})</span>
                     {!isPro && <span className="text-[#FF6B00]">Free (1 bike)</span>}
@@ -841,25 +841,25 @@ export const Navbar: React.FC<NavbarProps> = ({
           aria-modal="true"
           aria-labelledby="delete-account-dialog-title"
           data-testid="delete-account-modal"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-3.5 sm:p-4 animate-in fade-in duration-150"
         >
           <div
             data-testid="confirm-delete-account-box"
-            className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-red-100 p-6 space-y-4 text-left"
+            className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-white rounded-3xl shadow-2xl border border-red-100 p-4 sm:p-6 space-y-4 text-left"
           >
             <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
                 <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
                   <AlertTriangle className="w-5 h-5" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <h2
                     id="delete-account-dialog-title"
-                    className="text-base font-black text-slate-900"
+                    className="text-sm sm:text-base font-black text-slate-900"
                   >
                     Permanently Delete Account?
                   </h2>
-                  <p className="text-[11px] font-bold text-red-600 uppercase tracking-wider">
+                  <p className="text-[10px] sm:text-[11px] font-bold text-red-600 uppercase tracking-wider">
                     Double Confirmation Required
                   </p>
                 </div>
@@ -875,13 +875,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                 }}
                 title="Close dialog"
                 aria-label="Close delete account dialog"
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 space-y-2 text-xs text-red-900 leading-relaxed">
+            <div className="p-3 sm:p-3.5 rounded-2xl bg-red-50 border border-red-200 space-y-2 text-xs text-red-900 leading-relaxed">
               <p className="font-extrabold">
                 All data (motorcycles, service records, reminders) will be permanently removed and cannot be restored.
               </p>
@@ -923,7 +923,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 data-testid="delete-account-double-confirm-checkbox"
                 checked={doubleConfirmChecked}
                 onChange={(e) => setDoubleConfirmChecked(e.target.checked)}
-                className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer"
+                className="mt-0.5 w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
               />
               <span className="text-xs font-bold text-slate-700 leading-snug">
                 I understand that all my motorcycles, service records, and reminders will be permanently removed and cannot be restored.
@@ -934,13 +934,13 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div
                 role="alert"
                 data-testid="delete-account-error-message"
-                className="p-2.5 rounded-xl bg-red-100 border border-red-300 text-red-800 text-xs font-bold"
+                className="p-2.5 rounded-xl bg-red-100 border border-red-300 text-red-800 text-xs font-bold break-words"
               >
                 {deleteError}
               </div>
             )}
 
-            <div className="flex items-center gap-2.5 pt-1">
+            <div className="flex flex-col-reverse xs:flex-row items-stretch xs:items-center gap-2 sm:gap-2.5 pt-1">
               <button
                 type="button"
                 data-testid="cancel-delete-account-btn"
@@ -951,7 +951,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   setDeletePassword('');
                   setDeleteError(null);
                 }}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                className="flex-1 py-2.5 px-4 min-h-[40px] rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
               >
                 Cancel
               </button>
@@ -964,7 +964,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   (requiresPasswordForDelete && !deletePassword.trim())
                 }
                 onClick={handleExecuteDeleteAccount}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white font-extrabold text-xs shadow-md shadow-red-600/20 transition-colors cursor-pointer"
+                className="flex-1 py-2.5 px-4 min-h-[40px] rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white font-extrabold text-xs shadow-md shadow-red-600/20 transition-colors cursor-pointer"
               >
                 {isDeletingAccount ? 'Deleting Account...' : 'Delete Permanently'}
               </button>
